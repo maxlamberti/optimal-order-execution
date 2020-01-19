@@ -31,10 +31,14 @@ def get_order_book_data(pair, num_orders):
     try:
         logging.info("Querying kraken exchange for order book data for pair %s and 2*%s limit orders.", pair, num_orders)
         response = kraken.query_public('Depth', {'pair': pair, 'count': num_orders})
-        order_book = response.get('result', {}).get(pair, {'asks': [], 'bids': []})
     except HTTPError as e:
         logging.error("Failed to query order book at Kraken. Error:\n%s", str(e))
-        order_book = {'asks': [], 'bids': []}  # return empty order book on failure
+        response = {}  # empty response
+
+    if len(response.get('error', [])) > 0:
+        logging.error("Error returned in response from Kraken:\n%s", response['error'])
+
+    order_book = response.get('result', {}).get(pair, {'asks': [], 'bids': []})
 
     return order_book
 
