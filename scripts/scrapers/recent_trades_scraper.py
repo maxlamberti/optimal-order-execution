@@ -63,9 +63,12 @@ def upload_trades_to_s3(trades, s3_url):
     df['buy_or_sell'] = df['buy_or_sell'].astype('category')
     df['market_or_limit'] = df['market_or_limit'].astype('category')
 
-    logging.info("Uploading %s trades to S3 with url %s.", df.shape[0], s3_url)
-    df.to_parquet(s3_url, compression='gzip')
-    logging.info("Completed S3 upload.")
+    if df.shape[0] > 0:
+        logging.info("Uploading %s trades to S3 with url %s.", df.shape[0], s3_url)
+        df.to_parquet(s3_url, compression='gzip')
+        logging.info("Completed S3 upload.")
+    else:
+        logging.info("No observed trades. Skipping upload to S3")
 
 
 if __name__ == '__main__':
