@@ -9,6 +9,8 @@ Execute the script ```scripts/scrapers/download_s3_data.py``` with command line 
 
 Valid parameters for pair argument: {ALL, USDTZUSD, XETHZUSD, XXMRZUSD, XXRPZUSD, XREPZUSD, XBTZUSD}
 
+The bucket name is the S3 bucket containing our data set. A set of AWS credentials is required to access it. Valid parameters for the bucket argument are: {limit-order-book, recent-trades} 
+
 
 ### Loading The Data Into Python
 
