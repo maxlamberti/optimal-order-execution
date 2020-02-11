@@ -43,8 +43,8 @@ def load_data(data_directory, start_time=None, end_time=None, max_files=None):
 
 	# load selected data frames
 	data_frame_list = []
-	for file_count, file in tqdm(enumerate(files), total=min(len(files), max_files)):
-		if (max_files is not None) and file_count == max_files:
+	for file_count, file in tqdm(enumerate(files)):
+		if file_count == max_files:
 			break  # break and return file
 		filepath = os.path.join(data_directory, file)
 		df = pd.read_parquet(filepath)
