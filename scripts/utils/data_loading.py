@@ -5,7 +5,7 @@ from tqdm import tqdm
 from datetime import datetime
 
 
-def load_data(data_directory, start_time=None, end_time=None):
+def load_data(data_directory, start_time=None, end_time=None, max_files=None):
 	"""Load parquet data from specified directory. By default loads all data within directory. However,
 	if too much data, user can apply date filter to only load data within dates.
 
@@ -25,7 +25,7 @@ def load_data(data_directory, start_time=None, end_time=None):
 	"""
 
 	# select files within date inputs
-	files = np.array([f for f in os.listdir(data_directory) if os.path.isfile(os.path.join(data_directory, f))])
+	files = np.sort([f for f in os.listdir(data_directory) if os.path.isfile(os.path.join(data_directory, f))])
 
 	# if desired, only select files within date range
 	if (start_time is not None) and (end_time is not None):
@@ -43,12 +43,14 @@ def load_data(data_directory, start_time=None, end_time=None):
 
 	# load selected data frames
 	data_frame_list = []
-	for file in tqdm(files):
+	for file_count, file in tqdm(enumerate(files), total=min(len(files), max_files)):
+		if (max_files is not None) and file_count == max_files:
+			break  # break and return file
 		filepath = os.path.join(data_directory, file)
 		df = pd.read_parquet(filepath)
 		data_frame_list.append(df)
 
-	return pd.concat(data_frame_list)
+	return pd.concat(data_frame_list, sort=False)
 
 
 if __name__ == '__main__':
