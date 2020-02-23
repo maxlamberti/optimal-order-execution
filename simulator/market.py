@@ -12,10 +12,11 @@ class SimulatorError(Exception):
 
 class Queue:
 
-	def __init__(self, depth, price):
-		self.price = price
+	def __init__(self, depth):
 		self.non_agent_depth = depth
-		self.queue = [{'is_agent_order': False, 'volume': depth, 'executed_volume': 0}]
+		self.queue = []
+		if depth > 0:
+			self.queue.append({'is_agent_order': False, 'volume': depth, 'executed_volume': 0})
 
 	def add_agent_order(self, volume):
 		logging.debug("Adding agent order with volume: %s", volume)
@@ -76,6 +77,7 @@ class Queue:
 		elif new_addition_or_cancellation_volume < 0:
 			self.cancel_non_agent_orders(abs(new_addition_or_cancellation_volume))
 
+		return executed_agent_volume
 
 	def cancel_non_agent_orders(self, volume):
 
@@ -112,9 +114,11 @@ class Queue:
 			self.queue.pop(order_idx)
 			self.non_agent_depth -= order['volume']
 
+	def has_unfilled_agent_order(self):
+		return len([True for order in self.queue if (order['is_agent_order'] and (order['volume'] > 0))]) > 0
 
-
-
+	def get_agent_volume(self):
+		return sum([order['volume'] for order in self.queue if order['is_agent_order']])
 
 
 class MarketSimulator:
@@ -133,12 +137,17 @@ class MarketSimulator:
 		self.trade_iterator = iter(self.trades_df.resample('{}s'.format(self.freq), base=0, label='right', on='DateTime'))
 		self.new_market_order = {}
 		self.limit_orders = []
+		self.delete_limit_orders = []
 		self.queue_tracker = {'BID':{}, 'ASK': {}}
 
 		# discard data until trading starts
 		num_discard = int(np.ceil((self.trades_df.DateTime.min() - self.time_index[0]) / np.timedelta64(self.freq, 's')))
 		for _ in range(num_discard):
 			_, _ = next(self.ob_iterator)
+
+		# one period burn in, needed for limit order handling
+		self.prev_period_ob = next(self.ob_iterator)
+		_, _ = next(self.trade_iterator)
 
 	def _load_csv_data(self, path):
 		df = pd.read_csv(path)
@@ -149,27 +158,92 @@ class MarketSimulator:
 	def iterate(self):
 		"""Take one step forward in time and return market data."""
 
-		# TODO: limit order cancellations
+		executed_orders = []
+
 		#place market order
 		if self.new_market_order:
 			vwap, ob, trds, sim_time = self.execute_market_order(self.new_market_order)
 			self.new_market_order['execution_time'] = sim_time
 			self.new_market_order['price'] = vwap
-			# TODO: save order details / or return
+			executed_orders.append(self.new_market_order)
 			self.new_market_order = {}  # reset
 		else:  # if no new market order, advance state
 			ob, trds, sim_time = self.get_next_market_state()
 
+		# update existing limit orders, need to be applied to previous period order book
+		deletion_queues = {'BID': [], 'ASK': []}
+		for side in ['BID', 'ASK']:
+
+			if self.queue_tracker[side]:  # estimate executed volume per tick level
+				level_to_trade_volume_map = self._get_level_to_trade_volume_mapping(side, self.prev_period_ob, trds)
+
+			# update queue with new data
+			for price_level, queue in self.queue_tracker[side].items():
+				if queue.has_unfilled_agent_order():
+
+					tick_depth = self._get_tick_depth(self.prev_period_ob, side, price_level)
+
+					# check if price level has gone out of bounds, if yes delete queue
+					if (tick_depth == 0) and not self._check_if_valid_limit_order(side, price_level, self.prev_period_ob):
+						deletion_queues[side].append(price_level)  # queue moved out of bounds
+
+					# get approximate market vol executed at this price level and update queue
+					trade_volume_at_tick = level_to_trade_volume_map.get(price_level, 0)
+					executed_agent_volume = queue.update(tick_depth, trade_volume_at_tick)
+					if executed_agent_volume > 0:
+						is_buy = True if (side == 'BID') else False
+						executed_orders.append({'type': 'limit', 'is_buy': is_buy, 'volume': executed_agent_volume, 'price': price_level})
+				else:
+					deletion_queues[side].append(price_level)
+
+			# retire old queues
+			for price_level in deletion_queues[side]:
+				del self.queue_tracker[side][price_level]
+
+		# delete old limit orders
+		for price_level in self.delete_limit_orders:
+			logging.debug("Deleting limit order tracking queue at price %s", price_level)
+			if price_level in self.queue_tracker['ASK']:
+				del self.queue_tracker['ASK'][price_level]
+			if price_level in self.queue_tracker['BID']:
+				del self.queue_tracker['BID'][price_level]
+		self.delete_limit_orders = []  # reset delete list
+
 		# place new limit orders
 		for order in self.limit_orders:
-			self.execute_limit_order(order)
-
-		# TODO: check and update existing limit orders
+			self.execute_limit_order(ob, order)
+		self.limit_orders = []  # reset
 
 		logging.debug("Current simulator state: %s", sim_time)
 
-		return ob, trds
+		self.prev_period_ob = ob  # get ready for next period
 
+		return ob, trds, executed_orders
+
+	def _get_level_to_trade_volume_mapping(self, side, ob, trds):
+
+		use_buy_orders = True if (side == 'ASK') else False
+		price_lvl_to_volume_mapping = {}
+		remaining_trade_volume = trds[trds['BUY_SELL_FLAG'] == use_buy_orders].SIZE.sum()
+
+		for ob_level in ob[[side + '_PRICE', side + '_SIZE']].itertuples():  # assumes sorting by levels
+
+			if 'BID_PRICE' in ob_level._fields:
+				price = ob_level.BID_PRICE
+				size = ob_level.BID_SIZE
+				agent_volume = self.queue_tracker['BID'].get(ob_level, Queue(0)).get_agent_volume()
+			else:
+				price = ob_level.ASK_PRICE
+				size = ob_level.ASK_SIZE
+				agent_volume = self.queue_tracker['ASK'].get(ob_level, Queue(0)).get_agent_volume()
+
+			trade_volume = min(size + agent_volume, remaining_trade_volume)
+			remaining_trade_volume -= trade_volume
+			price_lvl_to_volume_mapping[price] = trade_volume
+
+		logging.debug("Calculated price level to volume mapping: %s", price_lvl_to_volume_mapping)
+
+		return price_lvl_to_volume_mapping
 
 	def get_next_market_state(self):
 
@@ -204,34 +278,37 @@ class MarketSimulator:
 
 		return vwap, ob, trds, sim_time
 
-
 	def execute_limit_order(self, ob, order):
-		# put order at top of queue
-		# data structure to monitor position in queue
 
 		# make sure tick size is 1 cent
 		order['price'] -= order['price'] % 0.01
 
-		# check if price is valid
+		# valid order can only be placed within spread or on correct side of LOB
 		side = 'BID' if order['is_buy'] else 'ASK'
-		opposite_side = 'ASK' if order['is_buy'] else 'BID'
-		if order['is_buy']:  # valid order can only be placed within spread or on correct side of LOB
-			is_valid_order = (order['price'] < ob[opposite_side + '_PRICE'].min()) and (order['price'] >= ob[side + '_PRICE'].min())
+		is_valid_order = self._check_if_valid_limit_order(side, order['price'], ob)
+		if is_valid_order:
+			# create queue at price level, place order at the end of the queue
+			tick_depth = self._get_tick_depth(ob, side, order['price'])
+			self.queue_tracker[side][order['price']] = Queue(tick_depth)
+			self.queue_tracker[side][order['price']].add_agent_order(order['volume'])
 		else:
-			is_valid_order = (order['price'] > ob[opposite_side + '_PRICE'].max()) and (order['price'] <= ob[side + '_PRICE'].max())
+			logging.warning("Invalid limit order placed, order is not accepted.")  # TODO: Pass information to agent
 
-		if not is_valid_order:
-			logging.info("Invalid limit order placed, order is not accepted.")
-			return "Order Rejected"
+	@staticmethod
+	def _check_if_valid_limit_order(side, price, ob):
+		# valid order can only be placed within spread or on correct side of LOB
+		opposite_side = 'ASK' if (side == 'BID') else 'BID'
+		if side == 'BID':  # valid order can only be placed within spread or on correct side of LOB
+			is_valid_order = (price < ob[opposite_side + '_PRICE'].min()) and (price >= ob[side + '_PRICE'].min())
+		else:
+			is_valid_order = (price > ob[opposite_side + '_PRICE'].max()) and (price <= ob[side + '_PRICE'].max())
+		return is_valid_order
 
-		# get tick volume at price level
-		tick_depth = ob.loc[ob[side + '_PRICE'] == order['price'], [side + '_SIZE']].values
+
+	def _get_tick_depth(self, ob, side, price):
+		tick_depth = ob.loc[ob[side + '_PRICE'] == price, [side + '_SIZE']].values
 		tick_depth = 0 if len(tick_depth) == 0 else tick_depth[-1, -1]
-
-		# add order to queue
-		# if tick_depth not in self.queue_tracker[side]:
-		return
-
+		return tick_depth
 
 	def _simulate_trade_vwap_from_order_book(self, ob, order):
 
@@ -254,7 +331,7 @@ class MarketSimulator:
 				break
 
 		# if order book insufficient to fill order, complete order at worst price
-		vwap = (vwap + unaccounted_volume * lvl_price) / order['volume']  # TODO: higher penalty for larger trades
+		vwap = (vwap + unaccounted_volume * lvl_price) / order['volume']  # TODO: consider higher penalty for larger trades
 		logging.debug("Final trade VWAP: %s", vwap)
 
 		return vwap
@@ -280,7 +357,6 @@ class MarketSimulator:
 
 		return vwap
 
-
 	def place_market_sell_order(self, volume):
 		logging.info("Registering market sell order with volume %s.", volume)
 		self.new_market_order = {'type': 'market', 'volume': volume, 'is_buy': False}
@@ -294,10 +370,13 @@ class MarketSimulator:
 		limit_order = {'type': 'limit', 'volume': volume, 'is_buy': False, 'price': price}
 		self.limit_orders.append(limit_order)
 
+	def place_limit_buy_order(self, volume, price):
+		logging.info("Registering limit buy order with volume %s.", volume)
+		limit_order = {'type': 'limit', 'volume': volume, 'is_buy': True, 'price': price}
+		self.limit_orders.append(limit_order)
 
-	def cancel_limit_order(self):
-		return
-
+	def cancel_limit_order(self, price_level):
+		self.delete_limit_orders.append(price_level)
 
 	def get_market_state(self):
 		return
@@ -309,20 +388,24 @@ if __name__ == '__main__':
 	TRADES_DATA_PATH = '../data/onetick/cat_trades.csv'
 
 	MarketSim = MarketSimulator(OB_DATA_PATH, TRADES_DATA_PATH, 2)
-	MarketSim.iterate()
+	ob, trds, executed_orders = MarketSim.iterate()
 	MarketSim.place_market_sell_order(1000)
-	MarketSim.iterate()
+	ob, trds, executed_orders = MarketSim.iterate()
 	MarketSim.place_market_sell_order(10)
-	MarketSim.iterate()
-	MarketSim.iterate()
-	MarketSim.iterate()
+	ob, trds, executed_orders = MarketSim.iterate()
+	ob, trds, executed_orders = MarketSim.iterate()
+	MarketSim.place_limit_buy_order(100, 83.31)
+	MarketSim.place_limit_sell_order(100, 83.34)
+	MarketSim.place_limit_sell_order(100, 83.35)
+	ob, trds, executed_orders = MarketSim.iterate()
 	MarketSim.place_market_buy_order(50)
-	MarketSim.iterate()
-	MarketSim.iterate()
+	ob, trds, executed_orders = MarketSim.iterate()
+	MarketSim.place_limit_sell_order(100, 83.37)
+	ob, trds, executed_orders = MarketSim.iterate()
 	MarketSim.place_market_buy_order(500)
-	MarketSim.iterate()
+	ob, trds, executed_orders = MarketSim.iterate()
 
-	Q = Queue(500, 181.0)
+	Q = Queue(500)
 	Q.add_agent_order(100)
 	Q.update(600, 150)
 	Q.update(600, 0)
