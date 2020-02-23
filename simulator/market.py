@@ -10,6 +10,113 @@ class SimulatorError(Exception):
 	pass
 
 
+class Queue:
+
+	def __init__(self, depth, price):
+		self.price = price
+		self.non_agent_depth = depth
+		self.queue = [{'is_agent_order': False, 'volume': depth, 'executed_volume': 0}]
+
+	def add_agent_order(self, volume):
+		logging.debug("Adding agent order with volume: %s", volume)
+		self.queue.append({'is_agent_order': True, 'volume': volume, 'executed_volume': 0})
+
+	def add_non_agent_order(self, volume):
+		logging.debug("Adding non-agent order with volume: %s", volume)
+		self.queue.append({'is_agent_order': False, 'volume': volume, 'executed_volume': 0})
+		self.non_agent_depth += volume
+
+	def execute_volume(self, volume):
+
+		# execute volume as waterfall through queue
+		logging.debug("Executing volume %s in queue.", volume)
+		remaining_execution_volume, executed_agent_volume = volume, 0
+		for order_num, order in enumerate(self.queue):
+			executed_volume = min(order['volume'], remaining_execution_volume)
+			logging.debug("Executing volume %s against order with volume %s", remaining_execution_volume, order['volume'])
+			remaining_execution_volume = max(0, remaining_execution_volume - order['volume'])
+			order['volume'] -= executed_volume
+			order['executed_volume'] += executed_volume
+			if order['is_agent_order']:
+				executed_agent_volume += executed_volume
+			logging.debug("Remaining execution volume is %s, order executed volume is %s, order remaining volume is %s",
+						  remaining_execution_volume, order['executed_volume'], order['volume'])
+			if order['volume'] > 0:
+				logging.debug("Fully executed trade, stopping queue execution.")
+				break
+		logging.debug("Remaining execution volume is: %s", remaining_execution_volume)
+
+		# delete fully executed orders
+		self.queue = [order for order in self.queue if order['volume'] > 0]
+		self.non_agent_depth = sum([order['volume'] for order in self.queue if not order['is_agent_order']])
+		logging.debug("After execution queue has %s non-agent depth and structure: %s", self.non_agent_depth, self.queue)
+
+		return executed_agent_volume, remaining_execution_volume
+
+	def update(self, new_non_agent_depth, executed_trade_volume):
+
+		# calculate net depth change
+		net_depth_change = new_non_agent_depth - self.non_agent_depth
+		logging.debug("Queue has %s non-agent depth and structure: %s", self.non_agent_depth, self.queue)
+
+		# simulate trade execution in the queue
+		if executed_trade_volume > 0:
+			executed_agent_volume, remaining_execution_volume = self.execute_volume(executed_trade_volume)
+		else:
+			executed_agent_volume, remaining_execution_volume = 0, 0
+
+		# break down depth changes
+		new_addition_or_cancellation_volume = net_depth_change + executed_trade_volume - executed_agent_volume - remaining_execution_volume
+		logging.debug("Net change in tick depth %s, %s is new additions or cancellations.",
+					  net_depth_change, new_addition_or_cancellation_volume)
+
+		# cancel orders or update orders
+		if new_addition_or_cancellation_volume > 0:  # new orders, place at end of queue
+			self.add_non_agent_order(new_addition_or_cancellation_volume)
+		elif new_addition_or_cancellation_volume < 0:
+			self.cancel_non_agent_orders(abs(new_addition_or_cancellation_volume))
+
+
+	def cancel_non_agent_orders(self, volume):
+
+		# index: volume
+		u = np.random.uniform(0, 1)
+		running_vol_sum = 0
+		logging.debug("Cancelling order at volume position %s.", u)
+		for order_idx, order in enumerate(self.queue):
+
+			if order['is_agent_order']:  # only cancel non-agent orders
+				continue
+
+			running_vol_sum += order['volume'] / self.non_agent_depth
+
+			if running_vol_sum > u:  # break if order is in uniform interval
+				logging.debug("Found order to cancel at queue index %s and running_vol_sum %s.",
+							  order_idx, running_vol_sum)
+				break
+
+		# cancel orders and remove from queue
+		if order['volume'] < volume:
+			self.queue.pop(order_idx)
+			remaining_volume = volume - order['volume']
+			self.non_agent_depth -= order['volume']
+			logging.debug("Removing order at queue index %s, canceling remaining vol %s.",
+						  order_idx, remaining_volume)
+			self.cancel_non_agent_orders(remaining_volume)  # cancel more orders on remaining volume
+		elif order['volume'] > volume:
+			logging.debug("Removing volume but not removing order from queue.")
+			order['volume'] -= volume
+			self.non_agent_depth -= volume
+		else:
+			logging.debug("Removing order with index %s from queue.", order_idx)
+			self.queue.pop(order_idx)
+			self.non_agent_depth -= order['volume']
+
+
+
+
+
+
 class MarketSimulator:
 
 	def __init__(self, order_book_file, trades_file, impact_param):
@@ -26,6 +133,7 @@ class MarketSimulator:
 		self.trade_iterator = iter(self.trades_df.resample('{}s'.format(self.freq), base=0, label='right', on='DateTime'))
 		self.new_market_order = {}
 		self.limit_orders = []
+		self.queue_tracker = {'BID':{}, 'ASK': {}}
 
 		# discard data until trading starts
 		num_discard = int(np.ceil((self.trades_df.DateTime.min() - self.time_index[0]) / np.timedelta64(self.freq, 's')))
@@ -98,6 +206,30 @@ class MarketSimulator:
 
 
 	def execute_limit_order(self, ob, order):
+		# put order at top of queue
+		# data structure to monitor position in queue
+
+		# make sure tick size is 1 cent
+		order['price'] -= order['price'] % 0.01
+
+		# check if price is valid
+		side = 'BID' if order['is_buy'] else 'ASK'
+		opposite_side = 'ASK' if order['is_buy'] else 'BID'
+		if order['is_buy']:  # valid order can only be placed within spread or on correct side of LOB
+			is_valid_order = (order['price'] < ob[opposite_side + '_PRICE'].min()) and (order['price'] >= ob[side + '_PRICE'].min())
+		else:
+			is_valid_order = (order['price'] > ob[opposite_side + '_PRICE'].max()) and (order['price'] <= ob[side + '_PRICE'].max())
+
+		if not is_valid_order:
+			logging.info("Invalid limit order placed, order is not accepted.")
+			return "Order Rejected"
+
+		# get tick volume at price level
+		tick_depth = ob.loc[ob[side + '_PRICE'] == order['price'], [side + '_SIZE']].values
+		tick_depth = 0 if len(tick_depth) == 0 else tick_depth[-1, -1]
+
+		# add order to queue
+		# if tick_depth not in self.queue_tracker[side]:
 		return
 
 
@@ -177,7 +309,6 @@ if __name__ == '__main__':
 	TRADES_DATA_PATH = '../data/onetick/cat_trades.csv'
 
 	MarketSim = MarketSimulator(OB_DATA_PATH, TRADES_DATA_PATH, 2)
-
 	MarketSim.iterate()
 	MarketSim.place_market_sell_order(1000)
 	MarketSim.iterate()
@@ -190,3 +321,24 @@ if __name__ == '__main__':
 	MarketSim.iterate()
 	MarketSim.place_market_buy_order(500)
 	MarketSim.iterate()
+
+	Q = Queue(500, 181.0)
+	Q.add_agent_order(100)
+	Q.update(600, 150)
+	Q.update(600, 0)
+	Q.update(600, 0)
+	Q.update(600, 0)
+	Q.update(600, 400)
+	Q.update(600, 0)
+	Q.update(600, 200)
+	Q.update(600, 100)
+	Q.update(600, 50)
+	Q.update(600, 250)
+	Q.update(450, 0)
+	Q.update(400, 25)
+	Q.update(400, 0)
+	Q.update(400, 450)
+	Q.update(50, 600)
+	Q.update(0, 0)
+	Q.update(400, 10)
+	Q.update(400, 10)
