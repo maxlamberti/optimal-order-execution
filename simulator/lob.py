@@ -291,7 +291,13 @@ class OrderBookSimulator:
 	def execute_limit_order(self, ob, order):
 
 		# make sure tick size is 1 cent
-		order['price'] -= order['price'] % 0.01
+		if 'price' in order:
+			order['price'] = round(order['price'], 2)
+		else:
+			midprice = (ob.BID_PRICE.max() + ob.ASK_PRICE.min()) / 2
+			midprice = round(midprice, 2)
+			order['price'] = midprice + order['tick'] * 0.01
+			order['price'] = round(order['price'], 2)
 
 		# valid order can only be placed within spread or on correct side of LOB
 		side = 'BID' if order['is_buy'] else 'ASK'
@@ -378,9 +384,19 @@ class OrderBookSimulator:
 		limit_order = {'type': 'limit', 'volume': volume, 'is_buy': False, 'price': price}
 		self.limit_orders.append(limit_order)
 
+	def place_limit_sell_order_at_tick(self, volume, tick):
+		logging.info("Registering limit sell order with volume %s at rel. tick to midprice %s.", volume, tick)
+		limit_order = {'type': 'limit', 'volume': volume, 'is_buy': False, 'tick': tick}
+		self.limit_orders.append(limit_order)
+
 	def place_limit_buy_order(self, volume, price):
 		logging.info("Registering limit buy order with volume %s at price %s.", volume, price)
 		limit_order = {'type': 'limit', 'volume': volume, 'is_buy': True, 'price': price}
+		self.limit_orders.append(limit_order)
+
+	def place_limit_buy_order_at_tick(self, volume, tick):
+		logging.info("Registering limit buy order with volume %s at rel. tick to midprice %s.", volume, tick)
+		limit_order = {'type': 'limit', 'volume': volume, 'is_buy': True, 'tick': tick}
 		self.limit_orders.append(limit_order)
 
 	def cancel_limit_order(self, price_level):
@@ -413,6 +429,8 @@ if __name__ == '__main__':
 	print(executed_orders, active_limit_order_levels)
 	MarketSim.place_market_buy_order(500)
 	ob, trds, executed_orders, active_limit_order_levels = MarketSim.iterate()
+	MarketSim.place_limit_sell_order_at_tick(100, 2)
+	MarketSim.place_limit_buy_order_at_tick(100, -2)
 	print(executed_orders, active_limit_order_levels)
 	ob, trds, executed_orders, active_limit_order_levels = MarketSim.iterate()
 	print(executed_orders, active_limit_order_levels)
