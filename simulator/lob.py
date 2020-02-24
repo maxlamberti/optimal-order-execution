@@ -123,7 +123,7 @@ class Queue:
 		return sum([order['volume'] for order in self.queue if order['is_agent_order']])
 
 
-class MarketSimulator:
+class OrderBookSimulator:
 
 	def __init__(self, order_book_file, trades_file, impact_param):
 
@@ -221,8 +221,8 @@ class MarketSimulator:
 		self.limit_orders = []  # reset
 
 		active_limit_order_levels = {
-			'ASK': self.queue_tracker['ASK'].keys(),
-			'BID': self.queue_tracker['BID'].keys()
+			'ASK': list(self.queue_tracker['ASK'].keys()),
+			'BID': list(self.queue_tracker['BID'].keys())
 		}
 
 		logging.debug("Current simulator state: %s", sim_time)
@@ -374,12 +374,12 @@ class MarketSimulator:
 		self.new_market_order = {'type': 'market', 'volume': volume, 'is_buy': True}
 
 	def place_limit_sell_order(self, volume, price):
-		logging.info("Registering limit sell order with volume %s.", volume)
+		logging.info("Registering limit sell order with volume %s at price %s.", volume, price)
 		limit_order = {'type': 'limit', 'volume': volume, 'is_buy': False, 'price': price}
 		self.limit_orders.append(limit_order)
 
 	def place_limit_buy_order(self, volume, price):
-		logging.info("Registering limit buy order with volume %s.", volume)
+		logging.info("Registering limit buy order with volume %s at price %s.", volume, price)
 		limit_order = {'type': 'limit', 'volume': volume, 'is_buy': True, 'price': price}
 		self.limit_orders.append(limit_order)
 
@@ -391,23 +391,31 @@ if __name__ == '__main__':
 	OB_DATA_PATH = '../data/onetick/cat_ob_5sec.csv'
 	TRADES_DATA_PATH = '../data/onetick/cat_trades.csv'
 
-	MarketSim = MarketSimulator(OB_DATA_PATH, TRADES_DATA_PATH, 2)
+	MarketSim = OrderBookSimulator(OB_DATA_PATH, TRADES_DATA_PATH, 2)
 	ob, trds, executed_orders, active_limit_order_levels = MarketSim.iterate()
 	MarketSim.place_market_sell_order(1000)
 	ob, trds, executed_orders, active_limit_order_levels = MarketSim.iterate()
+	print(executed_orders, active_limit_order_levels)
 	MarketSim.place_market_sell_order(10)
 	ob, trds, executed_orders, active_limit_order_levels = MarketSim.iterate()
+	print(executed_orders, active_limit_order_levels)
 	ob, trds, executed_orders, active_limit_order_levels = MarketSim.iterate()
 	MarketSim.place_limit_buy_order(100, 83.31)
 	MarketSim.place_limit_sell_order(100, 83.34)
 	MarketSim.place_limit_sell_order(100, 83.35)
 	ob, trds, executed_orders, active_limit_order_levels = MarketSim.iterate()
+	print(executed_orders, active_limit_order_levels)
 	MarketSim.place_market_buy_order(50)
 	ob, trds, executed_orders, active_limit_order_levels = MarketSim.iterate()
+	print(executed_orders, active_limit_order_levels)
 	MarketSim.place_limit_sell_order(100, 83.37)
 	ob, trds, executed_orders, active_limit_order_levels = MarketSim.iterate()
+	print(executed_orders, active_limit_order_levels)
 	MarketSim.place_market_buy_order(500)
 	ob, trds, executed_orders, active_limit_order_levels = MarketSim.iterate()
+	print(executed_orders, active_limit_order_levels)
+	ob, trds, executed_orders, active_limit_order_levels = MarketSim.iterate()
+	print(executed_orders, active_limit_order_levels)
 
 	Q = Queue(500)
 	Q.add_agent_order(100)
