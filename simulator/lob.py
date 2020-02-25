@@ -181,8 +181,6 @@ class OrderBookSimulator:
 		deletion_queues = {'BID': [], 'ASK': []}
 		for side in ['BID', 'ASK']:
 
-			opposite_side = 'ASK' if (side == 'BID') else 'BID'
-
 			if self.queue_tracker[side]:  # estimate executed volume per tick level
 				level_to_trade_volume_map = self._get_level_to_trade_volume_mapping(side, self.prev_period_ob, trds)
 
