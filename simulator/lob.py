@@ -3,127 +3,10 @@ import numpy as np
 import pandas as pd
 from operator import attrgetter
 from collections import namedtuple
+from queue import Queue
 
 
-logging.basicConfig(format='[%(levelname)s] | %(asctime)s | %(message)s', level=logging.DEBUG)
-
-
-class SimulatorError(Exception):
-	pass
-
-
-class Queue:
-
-	def __init__(self, depth):
-		self.non_agent_depth = depth
-		self.queue = []
-		if depth > 0:
-			self.queue.append({'is_agent_order': False, 'volume': depth, 'executed_volume': 0})
-
-	def add_agent_order(self, volume):
-		logging.debug("Adding agent order with volume: %s", volume)
-		self.queue.append({'is_agent_order': True, 'volume': volume, 'executed_volume': 0})
-
-	def add_non_agent_order(self, volume):
-		logging.debug("Adding non-agent order with volume: %s", volume)
-		self.queue.append({'is_agent_order': False, 'volume': volume, 'executed_volume': 0})
-		self.non_agent_depth += volume
-
-	def execute_volume(self, volume):
-
-		# execute volume as waterfall through queue
-		logging.debug("Executing volume %s in queue.", volume)
-		remaining_execution_volume, executed_agent_volume = volume, 0
-		for order_num, order in enumerate(self.queue):
-			executed_volume = min(order['volume'], remaining_execution_volume)
-			logging.debug("Executing volume %s against order with volume %s", remaining_execution_volume,
-						  order['volume'])
-			remaining_execution_volume = max(0, remaining_execution_volume - order['volume'])
-			order['volume'] -= executed_volume
-			order['executed_volume'] += executed_volume
-			if order['is_agent_order']:
-				executed_agent_volume += executed_volume
-			logging.debug("Remaining execution volume is %s, order executed volume is %s, order remaining volume is %s",
-						  remaining_execution_volume, order['executed_volume'], order['volume'])
-			if order['volume'] > 0:
-				logging.debug("Fully executed trade, stopping queue execution.")
-				break
-		logging.debug("Remaining execution volume is: %s", remaining_execution_volume)
-
-		# delete fully executed orders
-		self.queue = [order for order in self.queue if order['volume'] > 0]
-		self.non_agent_depth = sum([order['volume'] for order in self.queue if not order['is_agent_order']])
-		logging.debug("After execution queue has %s non-agent depth and structure: %s", self.non_agent_depth,
-					  self.queue)
-
-		return executed_agent_volume, remaining_execution_volume
-
-	def update(self, new_non_agent_depth, executed_trade_volume):
-
-		# calculate net depth change
-		net_depth_change = new_non_agent_depth - self.non_agent_depth
-		logging.debug("Queue has %s non-agent depth and structure: %s", self.non_agent_depth, self.queue)
-
-		# simulate trade execution in the queue
-		if executed_trade_volume > 0:
-			executed_agent_volume, remaining_execution_volume = self.execute_volume(executed_trade_volume)
-		else:
-			executed_agent_volume, remaining_execution_volume = 0, 0
-
-		# break down depth changes
-		new_addition_or_cancellation_volume = net_depth_change + executed_trade_volume - executed_agent_volume - \
-											  remaining_execution_volume
-		logging.debug("Net change in tick depth %s, %s is new additions or cancellations.",
-					  net_depth_change, new_addition_or_cancellation_volume)
-
-		# cancel orders or update orders
-		if new_addition_or_cancellation_volume > 0:  # new orders, place at end of queue
-			self.add_non_agent_order(new_addition_or_cancellation_volume)
-		elif new_addition_or_cancellation_volume < 0:
-			self.cancel_non_agent_orders(abs(new_addition_or_cancellation_volume))
-
-		return executed_agent_volume
-
-	def cancel_non_agent_orders(self, volume):
-
-		# index: volume
-		u = np.random.uniform(0, 1)
-		running_vol_sum = 0
-		logging.debug("Cancelling order at volume position %s.", u)
-		for order_idx, order in enumerate(self.queue):
-
-			if order['is_agent_order']:  # only cancel non-agent orders
-				continue
-
-			running_vol_sum += order['volume'] / self.non_agent_depth
-
-			if running_vol_sum > u:  # break if order is in uniform interval
-				logging.debug("Found order to cancel at queue index %s and running_vol_sum %s.",
-							  order_idx, running_vol_sum)
-				break
-
-		# cancel orders and remove from queue
-		if order['volume'] < volume:
-			self.queue.pop(order_idx)
-			remaining_volume = volume - order['volume']
-			self.non_agent_depth -= order['volume']
-			logging.debug("Removing order at queue index %s, canceling remaining vol %s.",
-						  order_idx, remaining_volume)
-			self.cancel_non_agent_orders(remaining_volume)  # cancel more orders on remaining volume
-		elif order['volume'] > volume:
-			logging.debug("Removing volume but not removing order from queue.")
-			order['volume'] -= volume
-			self.non_agent_depth -= volume
-		else:
-			logging.debug("Removing order with index %s from queue.", order_idx)
-			self.queue.pop(order_idx)
-			self.non_agent_depth -= order['volume']
-
-	def has_unfilled_agent_order(self):
-		return len([True for order in self.queue if (order['is_agent_order'] and (order['volume'] > 0))]) > 0
-
-	def get_agent_volume(self):
-		return sum([order['volume'] for order in self.queue if order['is_agent_order']])
+logging.basicConfig(format='[%(levelname)s] | %(asctime)s | %(message)s')
 
 
 class OrderBookSimulator:
@@ -165,17 +48,22 @@ class OrderBookSimulator:
 	def iterate(self):
 		"""Take one step forward in time and return market data."""
 
-		executed_orders = []
+		executed_orders = []  # agent orders executed in the market
 
 		# place market order
 		if self.new_market_order:
-			vwap, ob, trds, sim_time = self.execute_market_order(self.new_market_order)
+			vwap, ob, trds, sim_time = self._execute_market_order(self.new_market_order)
 			self.new_market_order['execution_time'] = sim_time
 			self.new_market_order['price'] = vwap
 			executed_orders.append(self.new_market_order)
 			self.new_market_order = {}  # reset
 		else:  # if no new market order, advance state
-			ob, trds, sim_time = self.get_next_market_state()
+			ob, trds, sim_time = self._get_next_market_state()
+
+		# place new limit orders
+		for order in self.limit_orders:
+			self._execute_limit_order(order)
+		self.limit_orders = []  # reset
 
 		# update existing limit orders, need to be applied to previous period order book
 		deletion_queues = {'BID': [], 'ASK': []}
@@ -231,11 +119,7 @@ class OrderBookSimulator:
 				del self.queue_tracker['BID'][price_level]
 		self.delete_limit_orders = []  # reset delete list
 
-		# place new limit orders
-		for order in self.limit_orders:
-			self.execute_limit_order(ob, order)
-		self.limit_orders = []  # reset
-
+		# get active limit order levels to return as state to user
 		active_limit_order_levels = {
 			'ASK': list(self.queue_tracker['ASK'].keys()),
 			'BID': list(self.queue_tracker['BID'].keys())
@@ -282,21 +166,21 @@ class OrderBookSimulator:
 
 		return price_lvl_to_volume_mapping
 
-	def get_next_market_state(self):
+	def _get_next_market_state(self):
 
 		ob_time, ob = next(self.ob_iterator)
 		trade_interval, trds = next(self.trade_iterator)
 
 		if ob_time != trade_interval:
-			raise SimulatorError("Order book and trade history are out of sync.")
+			raise Exception("Order book and trade history are out of sync.")
 
 		return ob, trds, trade_interval
 
-	def execute_market_order(self, order):
+	def _execute_market_order(self, order):
 
 		logging.debug("Executing trade in market: %s", order)
 
-		ob, trds, sim_time = self.get_next_market_state()
+		ob, trds, sim_time = self._get_next_market_state()
 
 		size = 'ASK_SIZE' if order['is_buy'] else 'BID_SIZE'
 		top_tick_vol = ob.loc[ob['LEVEL'] == 1, [size]].values[-1, -1]
@@ -309,12 +193,12 @@ class OrderBookSimulator:
 			logging.debug("Major aggressive trade: executing trade on historical trade data.")
 			while not (order['is_buy'] == trds['BUY_SELL_FLAG']).any():  # while there is no matching order skip period
 				logging.debug("Skipping period because of no historic trades to execute on.")
-				ob, trds, sim_time = self.get_next_market_state()
+				ob, trds, sim_time = self._get_next_market_state()
 			vwap = self._simulate_trade_vwap_from_historic_trades(trds, order)
 
 		return vwap, ob, trds, sim_time
 
-	def execute_limit_order(self, ob, order):
+	def _execute_limit_order(self, order):
 
 		# make sure tick size is 1 cent
 		if 'price' in order:
@@ -327,10 +211,10 @@ class OrderBookSimulator:
 
 		# valid order can only be placed within spread or on correct side of LOB
 		side = 'BID' if order['is_buy'] else 'ASK'
-		is_valid_order = self._check_if_valid_limit_order(side, order['price'], ob)
+		is_valid_order = self._check_if_valid_limit_order(side, order['price'], self.prev_period_ob)
 		if is_valid_order:
 			# create queue at price level, place order at the end of the queue
-			tick_depth = self._get_tick_depth(ob, side, order['price'])
+			tick_depth = self._get_tick_depth(self.prev_period_ob, side, order['price'])
 			self.queue_tracker[side][order['price']] = Queue(tick_depth)
 			self.queue_tracker[side][order['price']].add_agent_order(order['volume'])
 		else:
@@ -469,24 +353,3 @@ if __name__ == '__main__':
 	print(executed_orders, active_limit_order_levels)
 	ob, trds, executed_orders, active_limit_order_levels = MarketSim.iterate()
 	print(executed_orders, active_limit_order_levels)
-
-	Q = Queue(500)
-	Q.add_agent_order(100)
-	Q.update(600, 150)
-	Q.update(600, 0)
-	Q.update(600, 0)
-	Q.update(600, 0)
-	Q.update(600, 400)
-	Q.update(600, 0)
-	Q.update(600, 200)
-	Q.update(600, 100)
-	Q.update(600, 50)
-	Q.update(600, 250)
-	Q.update(450, 0)
-	Q.update(400, 25)
-	Q.update(400, 0)
-	Q.update(400, 450)
-	Q.update(50, 600)
-	Q.update(0, 0)
-	Q.update(400, 10)
-	Q.update(400, 10)
