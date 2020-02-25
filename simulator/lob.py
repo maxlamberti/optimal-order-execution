@@ -1,6 +1,9 @@
 import logging
 import numpy as np
 import pandas as pd
+from operator import attrgetter
+from collections import namedtuple
+
 
 logging.basicConfig(format='[%(levelname)s] | %(asctime)s | %(message)s', level=logging.DEBUG)
 
@@ -185,20 +188,33 @@ class OrderBookSimulator:
 			for price_level, queue in self.queue_tracker[side].items():
 				if queue.has_unfilled_agent_order():
 
-					tick_depth = self._get_tick_depth(self.prev_period_ob, side, price_level)
+					tick_depth = self._get_tick_depth(ob, side, price_level)
+					is_buy = True if (side == 'BID') else False
 
-					# check if price level has gone out of bounds, if yes delete queue
-					if (tick_depth == 0) and not self._check_if_valid_limit_order(side, price_level,
-																				  self.prev_period_ob):
-						deletion_queues[side].append(price_level)  # queue moved out of bounds
-
-					# get approximate market vol executed at this price level and update queue
+					# execution by trades: get approximate market vol executed at this price level and update queue
 					trade_volume_at_tick = level_to_trade_volume_map.get(price_level, 0)
 					executed_agent_volume = queue.update(tick_depth, trade_volume_at_tick)
 					if executed_agent_volume > 0:
-						is_buy = True if (side == 'BID') else False
 						executed_orders.append(
 							{'type': 'limit', 'is_buy': is_buy, 'volume': executed_agent_volume, 'price': price_level})
+
+					# execute by bid and ask meeting: if our limit order wanders onto the opposite side, start executing
+					if side == 'BID':
+						ask_bid_volume_overlap = ob.loc[ob['ASK_PRICE'] <= price_level, ['ASK_SIZE']].sum().values[-1]
+					else:
+						ask_bid_volume_overlap = ob.loc[ob['BID_PRICE'] >= price_level, ['BID_SIZE']].sum().values[-1]
+					if ask_bid_volume_overlap > 0: # order crosses opposite side:
+						remaining_agent_volume = queue.get_agent_volume()
+						executed_agent_volume = queue.update(0, min(ask_bid_volume_overlap, remaining_agent_volume))
+						if executed_agent_volume > 0:
+							executed_orders.append(
+								{'type': 'limit', 'is_buy': is_buy, 'volume': executed_agent_volume, 'price': price_level})
+
+
+					# check if price level has gone out of bounds, if yes delete queue
+					if (not queue.has_unfilled_agent_order()) or (not self._check_if_valid_limit_order_position(side, price_level, ob)):
+						deletion_queues[side].append(price_level)  # queue moved out of bounds
+
 				else:
 					deletion_queues[side].append(price_level)
 
@@ -237,16 +253,26 @@ class OrderBookSimulator:
 		price_lvl_to_volume_mapping = {}
 		remaining_trade_volume = trds[trds['BUY_SELL_FLAG'] == use_buy_orders].SIZE.sum()
 
-		for ob_level in ob[[side + '_PRICE', side + '_SIZE']].itertuples():  # assumes sorting by levels
+		# add queues which aren't in order book, example use cases: order placed in spread
+		ob_levels = list(ob[[side + '_PRICE', side + '_SIZE']].itertuples())
+		lvl_tuple = namedtuple('Pandas', [side + '_PRICE', side + '_SIZE'])
+		for price_level, queue in self.queue_tracker[side].items():
+			if (price_level == ob[side + '_PRICE']).any():
+				continue  # don't add levels which are already accounted for
+			additional_level = lvl_tuple(price_level, 0)
+			ob_levels.append(additional_level)
+		ob_levels = sorted(ob_levels, key=attrgetter(side + '_PRICE'))
 
+		# in price priority order, cycle through OB levels and calculate trade volume to apply
+		for ob_level in ob_levels:  # assumes sorting by levels
 			if 'BID_PRICE' in ob_level._fields:
 				price = ob_level.BID_PRICE
 				size = ob_level.BID_SIZE
-				agent_volume = self.queue_tracker['BID'].get(ob_level, Queue(0)).get_agent_volume()
+				agent_volume = self.queue_tracker['BID'].get(price, Queue(0)).get_agent_volume()
 			else:
 				price = ob_level.ASK_PRICE
 				size = ob_level.ASK_SIZE
-				agent_volume = self.queue_tracker['ASK'].get(ob_level, Queue(0)).get_agent_volume()
+				agent_volume = self.queue_tracker['ASK'].get(price, Queue(0)).get_agent_volume()
 
 			trade_volume = min(size + agent_volume, remaining_trade_volume)
 			remaining_trade_volume -= trade_volume
@@ -291,7 +317,13 @@ class OrderBookSimulator:
 	def execute_limit_order(self, ob, order):
 
 		# make sure tick size is 1 cent
-		order['price'] -= order['price'] % 0.01
+		if 'price' in order:
+			order['price'] = round(order['price'], 2)
+		else:
+			prev_midprice = (self.prev_period_ob.BID_PRICE.max() + self.prev_period_ob.ASK_PRICE.min()) / 2
+			prev_midprice = round(prev_midprice, 2)
+			order['price'] = prev_midprice + order['tick'] * 0.01
+			order['price'] = round(order['price'], 2)
 
 		# valid order can only be placed within spread or on correct side of LOB
 		side = 'BID' if order['is_buy'] else 'ASK'
@@ -312,6 +344,15 @@ class OrderBookSimulator:
 			is_valid_order = (price < ob[opposite_side + '_PRICE'].min()) and (price >= ob[side + '_PRICE'].min())
 		else:
 			is_valid_order = (price > ob[opposite_side + '_PRICE'].max()) and (price <= ob[side + '_PRICE'].max())
+		return is_valid_order
+
+	@staticmethod
+	def _check_if_valid_limit_order_position(side, price, ob):
+		# valid order must not be smaller than our furthest empirical LOB quote
+		if side == 'BID':
+			is_valid_order = price >= ob[side + '_PRICE'].min()
+		else:
+			is_valid_order = price <= ob[side + '_PRICE'].max()
 		return is_valid_order
 
 	def _get_tick_depth(self, ob, side, price):
@@ -378,9 +419,19 @@ class OrderBookSimulator:
 		limit_order = {'type': 'limit', 'volume': volume, 'is_buy': False, 'price': price}
 		self.limit_orders.append(limit_order)
 
+	def place_limit_sell_order_at_tick(self, volume, tick):
+		logging.info("Registering limit sell order with volume %s at rel. tick to midprice %s.", volume, tick)
+		limit_order = {'type': 'limit', 'volume': volume, 'is_buy': False, 'tick': tick}
+		self.limit_orders.append(limit_order)
+
 	def place_limit_buy_order(self, volume, price):
 		logging.info("Registering limit buy order with volume %s at price %s.", volume, price)
 		limit_order = {'type': 'limit', 'volume': volume, 'is_buy': True, 'price': price}
+		self.limit_orders.append(limit_order)
+
+	def place_limit_buy_order_at_tick(self, volume, tick):
+		logging.info("Registering limit buy order with volume %s at rel. tick to midprice %s.", volume, tick)
+		limit_order = {'type': 'limit', 'volume': volume, 'is_buy': True, 'tick': tick}
 		self.limit_orders.append(limit_order)
 
 	def cancel_limit_order(self, price_level):
@@ -413,6 +464,8 @@ if __name__ == '__main__':
 	print(executed_orders, active_limit_order_levels)
 	MarketSim.place_market_buy_order(500)
 	ob, trds, executed_orders, active_limit_order_levels = MarketSim.iterate()
+	MarketSim.place_limit_sell_order_at_tick(100, 2)
+	MarketSim.place_limit_buy_order_at_tick(100, -2)
 	print(executed_orders, active_limit_order_levels)
 	ob, trds, executed_orders, active_limit_order_levels = MarketSim.iterate()
 	print(executed_orders, active_limit_order_levels)
