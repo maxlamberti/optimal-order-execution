@@ -185,20 +185,20 @@ class OrderBookSimulator:
 			for price_level, queue in self.queue_tracker[side].items():
 				if queue.has_unfilled_agent_order():
 
-					tick_depth = self._get_tick_depth(self.prev_period_ob, side, price_level)
-
-					# check if price level has gone out of bounds, if yes delete queue
-					if (tick_depth == 0) and not self._check_if_valid_limit_order(side, price_level,
-																				  self.prev_period_ob):
-						deletion_queues[side].append(price_level)  # queue moved out of bounds
+					prev_tick_depth = self._get_tick_depth(self.prev_period_ob, side, price_level)
 
 					# get approximate market vol executed at this price level and update queue
 					trade_volume_at_tick = level_to_trade_volume_map.get(price_level, 0)
-					executed_agent_volume = queue.update(tick_depth, trade_volume_at_tick)
+					executed_agent_volume = queue.update(prev_tick_depth, trade_volume_at_tick)
 					if executed_agent_volume > 0:
 						is_buy = True if (side == 'BID') else False
 						executed_orders.append(
 							{'type': 'limit', 'is_buy': is_buy, 'volume': executed_agent_volume, 'price': price_level})
+
+					# check if price level has gone out of bounds, if yes delete queue
+					if not self._check_if_valid_limit_order(side, price_level, ob):
+						deletion_queues[side].append(price_level)  # queue moved out of bounds
+
 				else:
 					deletion_queues[side].append(price_level)
 
@@ -294,9 +294,9 @@ class OrderBookSimulator:
 		if 'price' in order:
 			order['price'] = round(order['price'], 2)
 		else:
-			midprice = (ob.BID_PRICE.max() + ob.ASK_PRICE.min()) / 2
-			midprice = round(midprice, 2)
-			order['price'] = midprice + order['tick'] * 0.01
+			prev_midprice = (self.prev_period_ob.BID_PRICE.max() + self.prev_period_ob.ASK_PRICE.min()) / 2
+			prev_midprice = round(prev_midprice, 2)
+			order['price'] = prev_midprice + order['tick'] * 0.01
 			order['price'] = round(order['price'], 2)
 
 		# valid order can only be placed within spread or on correct side of LOB
