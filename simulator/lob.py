@@ -10,6 +10,8 @@ from queue import Queue
 logging.basicConfig(format='[%(levelname)s] | %(asctime)s | %(message)s')
 
 
+#TODO: if trades df has no trades or runs out of trades throw error
+
 class OrderBookSimulator:
 
 	def __init__(self, order_book_file, trades_file, impact_param):
