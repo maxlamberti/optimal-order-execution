@@ -5,6 +5,19 @@ from tqdm import tqdm
 from datetime import datetime
 
 
+def get_data_file_paths(data_root):
+	data_paths = []
+	tickers = os.listdir(data_root)
+	tickers = [ticker for ticker in tickers if '.DS_Store' not in ticker]
+	for ticker in tickers:
+		ticker_path = os.path.join(data_root, ticker)
+		for period_identifier in os.listdir(ticker_path):
+			if '.DS_Store' in period_identifier:
+				continue
+			data_paths.append(os.path.join(ticker_path, period_identifier))
+	return data_paths
+
+
 def load_data(data_directory, start_time=None, end_time=None, max_files=None):
 	"""Load parquet data from specified directory. By default loads all data within directory. However,
 	if too much data, user can apply date filter to only load data within dates.
@@ -54,7 +67,6 @@ def load_data(data_directory, start_time=None, end_time=None, max_files=None):
 
 
 if __name__ == '__main__':
-
 	# example usage
 
 	# parameters
@@ -67,4 +79,4 @@ if __name__ == '__main__':
 	# load data
 	df = load_data(path_to_data, start_time, end_time)
 	equivalent_df_using_timestamps = load_data(path_to_data, start_timestamp, end_timestamp)
-	# might_eat_your_ram_df = load_data(path_to_data)
+# might_eat_your_ram_df = load_data(path_to_data)
