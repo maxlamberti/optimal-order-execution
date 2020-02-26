@@ -1,4 +1,5 @@
 import logging
+import feather
 import numpy as np
 import pandas as pd
 from operator import attrgetter
@@ -17,8 +18,8 @@ class OrderBookSimulator:
 		self.order_book_file = order_book_file
 		self.trades_file = trades_file
 		self.impact_param = impact_param
-		self.trades_df = self._load_csv_data(trades_file)
-		self.ob_df = self._load_csv_data(order_book_file)
+		self.trades_df = self._load_data(trades_file)
+		self.ob_df = self._load_data(order_book_file)
 		self.ob_iterator = iter(self.ob_df.groupby('DateTime'))
 		self.time_index = self.ob_df.DateTime.unique()
 		self.freq = int((self.time_index[1] - self.time_index[0]) / np.timedelta64(1, 's'))  # freq in seconds
@@ -36,13 +37,21 @@ class OrderBookSimulator:
 			_, _ = next(self.ob_iterator)
 
 		# one period burn in, needed for limit order handling
-		self.prev_period_ob = next(self.ob_iterator)
+		_, self.prev_period_ob = next(self.ob_iterator)
 		_, _ = next(self.trade_iterator)
 
 	@staticmethod
-	def _load_csv_data(path):
-		df = pd.read_csv(path)
-		df['DateTime'] = pd.to_datetime(df['Time'])
+	def _load_data(path):
+		if '.csv' in path:
+			df = pd.read_csv(path)
+		elif '.feather' in path:
+			df = feather.read_dataframe(path)
+		else:
+			raise Exception("Not sure if data is of type feather or csv.")
+
+		if 'DateTime' not in df.columns:
+			df['DateTime'] = pd.to_datetime(df['Time'])
+
 		return df
 
 	def iterate(self):
