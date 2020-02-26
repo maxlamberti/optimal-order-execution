@@ -35,13 +35,13 @@ if __name__ == '__main__':
 		trades['DateTime'] = pd.to_datetime(trades['Time'])
 		# trades.sort_values('DateTime', inplace=True)  # doesn't improve speed, maybe use DateTime as index?
 
-		for duration_id, sub_ob in ob.resample('{}s'.format(DURATION), base=0, label='right', on='DateTime'):
+		for duration_id, sub_ob in ob.resample('{}s'.format(DURATION), base=0, label='left', on='DateTime'):
 
 			# get trades data for respective period
-			sub_trades = trades[trades.DateTime.between(duration_id - pd.to_timedelta(DURATION, unit='s'), duration_id)]
+			sub_trades = trades[trades.DateTime.between(duration_id, duration_id + pd.to_timedelta(DURATION, unit='s'))]
 
 			# create save directory
-			save_directory = os.path.join(SAVE_DIRECTORY_PATH, ticker, str(duration_id))
+			save_directory = os.path.join(SAVE_DIRECTORY_PATH, ticker, str(duration_id).replace('/', ':'))
 			safe_mkdir(save_directory)
 
 			# save data as feather
