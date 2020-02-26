@@ -18,7 +18,8 @@ if __name__ == '__main__':
 
 	DATA_DIRECTORY_PATH = '../../data/onetick'
 	SAVE_DIRECTORY_PATH = '../../data/feather_onetick/'
-	DURATION = 60 * 10  # in seconds
+	DURATION = int(60 * 60 * 2)  # in seconds
+	MIN_TRADES_IN_PERIOD = 1  # if there are less than this amount of trades, won't save a file
 
 	files = os.listdir(DATA_DIRECTORY_PATH)
 	files = [file for file in files if 'ob' in file]
@@ -39,6 +40,8 @@ if __name__ == '__main__':
 
 			# get trades data for respective period
 			sub_trades = trades[trades.DateTime.between(duration_id, duration_id + pd.to_timedelta(DURATION, unit='s'))]
+			if sub_trades.shape[0] < MIN_TRADES_IN_PERIOD:
+				continue
 
 			# create save directory
 			save_directory = os.path.join(SAVE_DIRECTORY_PATH, ticker, str(duration_id).replace('/', ':'))
