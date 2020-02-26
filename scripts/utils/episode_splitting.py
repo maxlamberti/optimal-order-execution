@@ -25,7 +25,7 @@ if __name__ == '__main__':
 
 	for file in tqdm(files):
 
-		ticker = file.split('_')[0]  # TODO: identifier for data
+		ticker = file.split('_')[0]
 		trades_file = ticker + '_trades.csv'
 
 		# load data
