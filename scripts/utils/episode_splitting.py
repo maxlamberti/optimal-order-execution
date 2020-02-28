@@ -13,30 +13,38 @@ def safe_mkdir(dir):
 		safe_mkdir(dir)
 
 
+def read_data(filename):
+
+	if '.csv' in filename:
+		df = pd.read_csv(filename)
+	elif '.feather' in filename:
+		df = feather.read_dataframe(filename)
+	else:
+		raise Exception("File format not understood: {}".format(filename))
+
+	return df
+
 if __name__ == '__main__':
 
-
-	DATA_DIRECTORY_PATH = '../../data/onetick'
-	SAVE_DIRECTORY_PATH = '../../data/feather_onetick/'
-	DURATION = int(60 * 60 * 2)  # in seconds
+	OB_FILE = 'ob.feather'
+	TRADES_FILE = 'trades.feather'
+	DATA_DIRECTORY_PATH = '../../data/onetick/raw/'
+	SAVE_DIRECTORY_PATH = '../../data/onetick/processed/'
+	DURATION = int(6.5 * 60 * 60 / 2)  # in seconds
 	MIN_TRADES_IN_PERIOD = 1  # if there are less than this amount of trades, won't save a file
 
-	files = os.listdir(DATA_DIRECTORY_PATH)
-	files = [file for file in files if 'ob' in file]
+	tickers = os.listdir(DATA_DIRECTORY_PATH)
 
-	for file in tqdm(files):
-
-		ticker = file.split('_')[0]
-		trades_file = ticker + '_trades.csv'
+	for ticker in tqdm(tickers):
 
 		# load data
-		ob = pd.read_csv(os.path.join(DATA_DIRECTORY_PATH, file))
-		trades = pd.read_csv(os.path.join(DATA_DIRECTORY_PATH, trades_file))
+		ob = read_data(os.path.join(DATA_DIRECTORY_PATH, ticker, OB_FILE))
+		trades = read_data(os.path.join(DATA_DIRECTORY_PATH, ticker, TRADES_FILE))
 		ob['DateTime'] = pd.to_datetime(ob['Time'])
 		trades['DateTime'] = pd.to_datetime(trades['Time'])
 		# trades.sort_values('DateTime', inplace=True)  # doesn't improve speed, maybe use DateTime as index?
 
-		for duration_id, sub_ob in ob.resample('{}s'.format(DURATION), base=0, label='left', on='DateTime'):
+		for duration_id, sub_ob in tqdm(ob.resample('{}s'.format(DURATION), base=0, label='left', on='DateTime')):
 
 			# get trades data for respective period
 			sub_trades = trades[trades.DateTime.between(duration_id, duration_id + pd.to_timedelta(DURATION, unit='s'))]
