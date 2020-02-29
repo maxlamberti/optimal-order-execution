@@ -201,11 +201,12 @@ class OrderBookSimulator:
 			logging.debug("Minor aggressive trade: executing trade with no impact on LOB.")
 			vwap = self._simulate_trade_vwap_from_order_book(ob, order)  # calculate execution price from order book
 		else:  # large trade, assume impact and jump to next aggressive sell order
+			vwap = self._simulate_trade_vwap_from_order_book(ob, order)  # calculate execution price from order book
 			logging.debug("Major aggressive trade: executing trade on historical trade data.")
 			while not (order['is_buy'] == trds['BUY_SELL_FLAG']).any():  # while there is no matching order skip period
 				logging.debug("Skipping period because of no historic trades to execute on.")
 				ob, trds, sim_time = self._get_next_market_state()
-			vwap = self._simulate_trade_vwap_from_historic_trades(trds, order)
+			# vwap = self._simulate_trade_vwap_from_historic_trades(trds, order)
 
 		return vwap, ob, trds, sim_time
 
