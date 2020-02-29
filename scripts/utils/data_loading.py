@@ -15,6 +15,7 @@ def get_data_file_paths(data_root):
 			if '.DS_Store' in period_identifier:
 				continue
 			data_paths.append(os.path.join(ticker_path, period_identifier))
+	data_paths = np.unique(['/'.join(path.split('/')[:-1]) for path in data_paths])
 	return data_paths
 
 
