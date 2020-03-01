@@ -317,7 +317,7 @@ class OrderBookSimulator:
 
 	def place_limit_sell_order_at_tick(self, volume, tick):
 		logging.info("Registering limit sell order with volume %s at rel. tick to midprice %s.", volume, tick)
-		limit_order = {'type': 'limit', 'volume': volume, 'is_buy': False, 'tick': tick}
+		limit_order = {'type': 'limit', 'volume': volume, 'is_buy': False, 'tick': abs(tick)}
 		self.limit_orders.append(limit_order)
 
 	def place_limit_buy_order(self, volume, price):
@@ -327,7 +327,7 @@ class OrderBookSimulator:
 
 	def place_limit_buy_order_at_tick(self, volume, tick):
 		logging.info("Registering limit buy order with volume %s at rel. tick to midprice %s.", volume, tick)
-		limit_order = {'type': 'limit', 'volume': volume, 'is_buy': True, 'tick': tick}
+		limit_order = {'type': 'limit', 'volume': volume, 'is_buy': True, 'tick': -abs(tick)}
 		self.limit_orders.append(limit_order)
 
 	def cancel_limit_order(self, price_level):
