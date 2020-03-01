@@ -224,7 +224,8 @@ class OrderBookSimulator:
 		# valid order can only be placed within spread or on correct side of LOB
 		side = 'BID' if order['is_buy'] else 'ASK'
 		is_valid_order = self._check_if_valid_limit_order(side, order['price'], self.prev_period_ob)
-		if is_valid_order:
+		is_new_queue = order['price'] not in self.queue_tracker[side]
+		if is_valid_order and is_new_queue:  # only place new order if dont already have an order in the queue
 			# create queue at price level, place order at the end of the queue
 			tick_depth = self._get_tick_depth(self.prev_period_ob, side, order['price'])
 			self.queue_tracker[side][order['price']] = Queue(tick_depth)
