@@ -30,13 +30,19 @@ class DiscreteTrader:
 		self.limit_order_level = limit_order_level
 
 		# Set up initial LOB simulator
+		self.observation_space = gym.spaces.Box(
+			low=np.array([0, 0, 0, 0, -1, 0, -np.inf, -np.inf, 0, 0, 0]),
+			high=np.array([np.inf, np.inf, 1, np.inf, np.inf, np.inf, np.inf, np.inf, 1, np.inf, 1]),
+			dtype=np.float32
+		)
+
 		self.current_sim_id = np.random.choice(self.simulation_ids, 1)[-1]
 		lob_file = os.path.join(self.current_sim_id, 'ob.feather')
 		trades_file = os.path.join(self.current_sim_id, 'trades.feather')
 		self.LOB_SIM = OrderBookSimulator(lob_file, trades_file, impact_param)
 		ob, trds, executed_orders, active_limit_order_levels = self.LOB_SIM.iterate()
 		self.initial_price = (ob.BID_PRICE.max() + ob.ASK_PRICE.min()) / 2
-		self.observation_space = self.calculate_state(ob, trds, executed_orders, active_limit_order_levels)
+		# self.state = self.calculate_state(ob, trds, executed_orders, active_limit_order_levels)
 
 		# Define Action Space
 		# 0: do nothing, 1: LO at tick level 2, 2: MO of size 100, 3: MO of size 200
@@ -103,9 +109,9 @@ class DiscreteTrader:
 		reward = self.calculate_reward(shortfall, self.time)
 
 		# Update agent state
-		self.observation_space = self.calculate_state(ob, trds, executed_orders, active_limit_order_levels)
+		state = self.calculate_state(ob, trds, executed_orders, active_limit_order_levels)
 
-		return self.observation_space, reward, is_done
+		return state, reward, is_done, None
 
 	def reset(self):
 
@@ -123,9 +129,9 @@ class DiscreteTrader:
 		self.LOB_SIM = OrderBookSimulator(lob_file, trades_file, self.impact_param)
 		ob, trds, executed_orders, active_limit_order_levels = self.LOB_SIM.iterate()
 		self.initial_price = (ob.BID_PRICE.max() + ob.ASK_PRICE.min()) / 2
-		self.observation_space = self.calculate_state(ob, trds, executed_orders, active_limit_order_levels)
+		state = self.calculate_state(ob, trds, executed_orders, active_limit_order_levels)
 
-		return self.observation_space
+		return state
 
 	def calculate_reward(self, shortfall, time):
 		if time >= self.trade_window:
