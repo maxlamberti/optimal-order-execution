@@ -1,13 +1,16 @@
 import os
 import gym
 import numpy as np
-from scripts.utils.data_loading import get_data_file_paths
+from datetime import datetime, date, time, timedelta
 from simulator.lob import OrderBookSimulator
+from scripts.utils.data_loading import get_data_file_paths
 
 
 class DiscreteTrader:
 
 	def __init__(self, inventory, target_inventory, trade_window, impact_param, data_path, limit_order_level=2, is_buy_agent=False, sampling_freq=5):
+
+		self.metadata = None
 
 		# Simulation parameters
 		self.period = 0  # in index units, ie. period=0 is t=0secs, period=1 is t=5secs
@@ -32,8 +35,8 @@ class DiscreteTrader:
 		trades_file = os.path.join(self.current_sim_id, 'trades.feather')
 		self.LOB_SIM = OrderBookSimulator(lob_file, trades_file, impact_param)
 		ob, trds, executed_orders, active_limit_order_levels = self.LOB_SIM.iterate()
-		self.initial_midprice = (ob.BID_PRICE.max() + ob.ASK_PRICE.min()) / 2
-		self.state = self.calculate_state(ob, trds, executed_orders, active_limit_order_levels)
+		self.initial_price = (ob.BID_PRICE.max() + ob.ASK_PRICE.min()) / 2
+		self.observation_space = self.calculate_state(ob, trds, executed_orders, active_limit_order_levels)
 
 		# Define Action Space
 		# 0: do nothing, 1: LO at tick level 2, 2: MO of size 100, 3: MO of size 200
@@ -81,9 +84,9 @@ class DiscreteTrader:
 		if total_executed_volume > 0:
 			executed_vwap = price_weighted_volume / total_executed_volume
 			if self.is_buy_agent:
-				shortfall = (self.initial_midprice - executed_vwap) / self.initial_midprice
+				shortfall = (self.initial_price - executed_vwap) / self.initial_price
 			else:
-				shortfall = (executed_vwap - self.initial_midprice) / self.initial_midprice
+				shortfall = (executed_vwap - self.initial_price) / self.initial_price
 		else:
 			shortfall = 0
 
@@ -100,9 +103,9 @@ class DiscreteTrader:
 		reward = self.calculate_reward(shortfall, self.time)
 
 		# Update agent state
-		self.state = self.calculate_state(ob, trds, executed_orders, active_limit_order_levels)
+		self.observation_space = self.calculate_state(ob, trds, executed_orders, active_limit_order_levels)
 
-		return self.state, reward, is_done
+		return self.observation_space, reward, is_done
 
 	def reset(self):
 
@@ -119,10 +122,10 @@ class DiscreteTrader:
 		trades_file = os.path.join(self.current_sim_id, 'trades.feather')
 		self.LOB_SIM = OrderBookSimulator(lob_file, trades_file, self.impact_param)
 		ob, trds, executed_orders, active_limit_order_levels = self.LOB_SIM.iterate()
-		self.initial_midprice = (ob.BID_PRICE.max() + ob.ASK_PRICE.min()) / 2
-		self.state = self.calculate_state(ob, trds, executed_orders, active_limit_order_levels)
+		self.initial_price = (ob.BID_PRICE.max() + ob.ASK_PRICE.min()) / 2
+		self.observation_space = self.calculate_state(ob, trds, executed_orders, active_limit_order_levels)
 
-		return self.state  # TODO: does the state need to be returned here?
+		return self.observation_space
 
 	def calculate_reward(self, shortfall, time):
 		if time >= self.trade_window:
@@ -133,4 +136,38 @@ class DiscreteTrader:
 		return reward
 
 	def calculate_state(self, ob, trds, executed_orders, active_limit_order_levels):
-		return np.array([])  # TODO: calculate state
+
+		side = 'ASK' if self.is_buy_agent else 'BID'
+		opposite_side = 'BID' if (side == 'ASK') else 'ASK'
+		best_tick_volume = ob.loc[ob['LEVEL'] == 1, [side + '_SIZE']].values[-1, -1] / 100
+		second_best_tick_volume = ob.loc[ob['LEVEL'] == 2, [side + '_SIZE']].values[-1, -1] / 100
+		trading_day_progression = (1.0 / (6.5 * 60 * 60)) * ((datetime.combine(date.today(), ob.Time.dt.time.values[
+			-1]) - datetime.combine(date.today(), time(9, 30, 0))) / timedelta(seconds=1))
+		inventory_delta = abs(self.current_inventory - self.target_inventory) / max(abs(self.initial_inventory),
+																					abs(self.target_inventory))
+		pct_diff_from_initial_price = (ob.loc[ob['LEVEL'] == 1, [side + '_PRICE']].values[
+										   -1, -1] - self.initial_price) / self.initial_price
+		gross_last_period_trade_volume = trds.SIZE.sum() / 100
+		net_last_period_trade_volume = (trds[trds['BUY_SELL_FLAG'] == 1].SIZE.sum() - trds[
+			trds['BUY_SELL_FLAG'] == 0].SIZE.sum()) / 100
+		spread = 10 * (ob.ASK_PRICE.min() - ob.BID_PRICE.max())
+		pct_trade_window_progression = self.time / self.trade_window
+		num_open_lob_levels = len(active_limit_order_levels['ASK']) + len(active_limit_order_levels['BID'])
+		has_limit_order_at_tick_2 = ob.loc[ob['LEVEL'] == 2, [opposite_side + '_PRICE']].values[-1, -1] in \
+									active_limit_order_levels[opposite_side]
+
+		state = np.array([
+			best_tick_volume,
+			second_best_tick_volume,
+			trading_day_progression,
+			inventory_delta,
+			pct_diff_from_initial_price,
+			gross_last_period_trade_volume,
+			net_last_period_trade_volume,
+			spread,
+			pct_trade_window_progression,
+			num_open_lob_levels,
+			has_limit_order_at_tick_2
+		])
+
+		return state
