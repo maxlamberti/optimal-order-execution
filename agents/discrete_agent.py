@@ -111,7 +111,7 @@ class DiscreteTrader:
 		# Update agent state
 		state = self.calculate_state(ob, trds, executed_orders, active_limit_order_levels)
 
-		return state, reward, is_done, None
+		return state, reward, is_done, {}
 
 	def reset(self):
 
