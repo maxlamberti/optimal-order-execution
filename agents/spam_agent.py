@@ -65,7 +65,7 @@ class SpamTrader(gym.Env):
 				self.LOB_SIM.place_limit_buy_order_at_tick(volume, self.limit_order_level)
 			else:
 				self.LOB_SIM.place_limit_sell_order_at_tick(volume, self.limit_order_level)
-			placed_order = True
+			placed_order = False
 		elif action == 2:  # MO of size 100
 			inventory_delta = abs(self.target_inventory - self.current_inventory)
 			volume = min(inventory_delta, 100.0)
