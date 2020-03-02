@@ -142,6 +142,7 @@ class SpamTrader(gym.Env):
 		self.initial_price = (ob.BID_PRICE.max() + ob.ASK_PRICE.min()) / 2
 		self.state = self.calculate_state(ob, trds, executed_orders, active_limit_order_levels)
 		self.order_execution_history = []
+		self.one_minute_vol_executed = np.zeros(12)
 
 		return self.state
 
@@ -156,6 +157,8 @@ class SpamTrader(gym.Env):
 		last_minute_vol_executed = np.sum(self.one_minute_vol_executed)
 		if last_minute_vol_executed > self.vol_penality_threshold:
 			fast_execution_penalty = -0.001 * self.one_minute_vol_executed / self.vol_penality_threshold
+		else:
+			fast_execution_penalty = 0.0
 
 		return shortfall + fast_execution_penalty
 
