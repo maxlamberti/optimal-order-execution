@@ -56,20 +56,20 @@ class OrderBookSimulator:
 
 		return df
 
-	def iterate(self):
+	def iterate(self, force=False):
 		"""Take one step forward in time and return market data."""
 
 		executed_orders = []  # agent orders executed in the market
 
 		# place market order
 		if self.new_market_order:
-			vwap, ob, trds, sim_time = self._execute_market_order(self.new_market_order)
+			vwap, ob, trds, sim_time = self._execute_market_order(self.new_market_order, force)
 			self.new_market_order['execution_time'] = sim_time
 			self.new_market_order['price'] = vwap
 			executed_orders.append(self.new_market_order)
 			self.new_market_order = {}  # reset
 		else:  # if no new market order, advance state
-			ob, trds, sim_time = self._get_next_market_state()
+			ob, trds, sim_time = self._get_next_market_state(force)
 
 		# place new limit orders
 		for order in self.limit_orders:
@@ -177,21 +177,21 @@ class OrderBookSimulator:
 
 		return price_lvl_to_volume_mapping
 
-	def _get_next_market_state(self):
+	def _get_next_market_state(self, force=False):
 
 		ob_time, ob = next(self.ob_iterator)
 		trade_interval, trds = next(self.trade_iterator)
 
-		if ob_time != trade_interval:
+		if (not force) and (ob_time != trade_interval):
 			raise Exception("Order book and trade history are out of sync.")
 
 		return ob, trds, trade_interval
 
-	def _execute_market_order(self, order):
+	def _execute_market_order(self, order, force=False):
 
 		logging.debug("Executing trade in market: %s", order)
 
-		ob, trds, sim_time = self._get_next_market_state()
+		ob, trds, sim_time = self._get_next_market_state(force)
 
 		size = 'ASK_SIZE' if order['is_buy'] else 'BID_SIZE'
 		top_tick_vol = ob.loc[ob['LEVEL'] == 1, [size]].values[-1, -1]
@@ -205,7 +205,7 @@ class OrderBookSimulator:
 			logging.debug("Major aggressive trade: executing trade on historical trade data.")
 			while not (order['is_buy'] == trds['BUY_SELL_FLAG']).any():  # while there is no matching order skip period
 				logging.debug("Skipping period because of no historic trades to execute on.")
-				ob, trds, sim_time = self._get_next_market_state()
+				ob, trds, sim_time = self._get_next_market_state(force)
 			# vwap = self._simulate_trade_vwap_from_historic_trades(trds, order)
 
 		return vwap, ob, trds, sim_time

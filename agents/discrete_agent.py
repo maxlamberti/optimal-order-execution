@@ -40,7 +40,7 @@ class DiscreteTrader(gym.Env):
 		lob_file = os.path.join(self.current_sim_id, 'ob.feather')
 		trades_file = os.path.join(self.current_sim_id, 'trades.feather')
 		self.LOB_SIM = OrderBookSimulator(lob_file, trades_file, impact_param)
-		ob, trds, executed_orders, active_limit_order_levels = self.LOB_SIM.iterate()
+		ob, trds, executed_orders, active_limit_order_levels = self.LOB_SIM.iterate(force=True)
 		self.initial_price = (ob.BID_PRICE.max() + ob.ASK_PRICE.min()) / 2
 		self.state = self.calculate_state(ob, trds, executed_orders, active_limit_order_levels)
 
