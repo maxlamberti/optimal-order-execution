@@ -42,7 +42,7 @@ class DiscreteTrader:
 		self.LOB_SIM = OrderBookSimulator(lob_file, trades_file, impact_param)
 		ob, trds, executed_orders, active_limit_order_levels = self.LOB_SIM.iterate()
 		self.initial_price = (ob.BID_PRICE.max() + ob.ASK_PRICE.min()) / 2
-		# self.state = self.calculate_state(ob, trds, executed_orders, active_limit_order_levels)
+		self.state = self.calculate_state(ob, trds, executed_orders, active_limit_order_levels)
 
 		# Define Action Space
 		# 0: do nothing, 1: LO at tick level 2, 2: MO of size 100, 3: MO of size 200
@@ -74,7 +74,10 @@ class DiscreteTrader:
 				self.LOB_SIM.place_market_sell_order(volume)
 
 		# Update market environment
-		ob, trds, executed_orders, active_limit_order_levels = self.LOB_SIM.iterate()
+		try:
+			ob, trds, executed_orders, active_limit_order_levels = self.LOB_SIM.iterate()
+		except:
+			return self.state, 0, True, {}
 
 		# Check executed orders and update inventory
 		price_weighted_volume, total_executed_volume = 0, 0
@@ -109,9 +112,9 @@ class DiscreteTrader:
 		reward = self.calculate_reward(shortfall, self.time)
 
 		# Update agent state
-		state = self.calculate_state(ob, trds, executed_orders, active_limit_order_levels)
+		self.state = self.calculate_state(ob, trds, executed_orders, active_limit_order_levels)
 
-		return state, reward, is_done, {}
+		return self.state, reward, is_done, {}
 
 	def reset(self):
 
@@ -129,9 +132,9 @@ class DiscreteTrader:
 		self.LOB_SIM = OrderBookSimulator(lob_file, trades_file, self.impact_param)
 		ob, trds, executed_orders, active_limit_order_levels = self.LOB_SIM.iterate()
 		self.initial_price = (ob.BID_PRICE.max() + ob.ASK_PRICE.min()) / 2
-		state = self.calculate_state(ob, trds, executed_orders, active_limit_order_levels)
+		self.state = self.calculate_state(ob, trds, executed_orders, active_limit_order_levels)
 
-		return state
+		return self.state
 
 	def calculate_reward(self, shortfall, time):
 		if time >= self.trade_window:
