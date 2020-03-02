@@ -8,7 +8,7 @@ from scripts.utils.data_loading import get_data_file_paths
 
 class SpamTrader(gym.Env):
 
-	def __init__(self, inventory, target_inventory, trade_window, impact_param, data_path, vol_penalty_window=12, vol_penality_threshold=200, vol_penalty=0.001, limit_order_level=2, is_buy_agent=False, sampling_freq=5):
+	def __init__(self, inventory, target_inventory, trade_window, impact_param, data_path, inventory_reduction_reward=0.001, vol_penalty_window=12, vol_penality_threshold=200, vol_penalty=0.001, limit_order_level=2, is_buy_agent=False, sampling_freq=5):
 
 		self.metadata = None
 
@@ -33,11 +33,12 @@ class SpamTrader(gym.Env):
 		self.vol_penality_threshold = vol_penality_threshold
 		self.vol_penalty = vol_penalty
 		self.vol_penalty_window = vol_penalty_window
+		self.inventory_reduction_reward = inventory_reduction_reward
 
 		# Set up initial LOB simulator
 		self.observation_space = gym.spaces.Box(
-			low=np.array([0, -1, 0, 0, 0]),
-			high=np.array([1, 1, 1, np.inf, np.inf]),
+			low=np.array([0, -np.inf, 0, 0, 0]),
+			high=np.array([1, np.inf, 1, np.inf, np.inf]),
 			dtype=np.float32
 		)
 
@@ -161,13 +162,21 @@ class SpamTrader(gym.Env):
 		# else:
 		# 	inventory_penalty = 0
 
+		# attempt to reduce inventory reward
+		if placed_order:
+			reduce_inventory_reward = self.inventory_reduction_reward
+		else:
+			reduce_inventory_reward = 0
+
 		last_minute_vol_executed = np.sum(self.one_minute_vol_executed)
 		if (last_minute_vol_executed > self.vol_penality_threshold) and placed_order:
-			fast_execution_penalty = -self.vol_penalty * last_minute_vol_executed / self.vol_penality_threshold
+			fast_execution_penalty = -self.vol_penalty - reduce_inventory_reward
 		else:
 			fast_execution_penalty = 0.0
 
-		return shortfall + fast_execution_penalty
+		# inventory risk
+
+		return shortfall + fast_execution_penalty + reduce_inventory_reward
 
 	def calculate_state(self, ob, trds, executed_orders, active_limit_order_levels):
 
@@ -179,7 +188,7 @@ class SpamTrader(gym.Env):
 		# 	-1]) - datetime.combine(date.today(), time(9, 30, 0))) / timedelta(seconds=1))
 		inventory_delta = abs(self.current_inventory - self.target_inventory) / max(abs(self.initial_inventory),
 																					abs(self.target_inventory))
-		pct_diff_from_initial_price = (ob.loc[ob['LEVEL'] == 1, [side + '_PRICE']].values[
+		pct_diff_from_initial_price = 100.0 * (ob.loc[ob['LEVEL'] == 1, [side + '_PRICE']].values[
 										   -1, -1] - self.initial_price) / self.initial_price
 		# gross_last_period_trade_volume = trds.SIZE.sum() / 100
 		# net_last_period_trade_volume = (trds[trds['BUY_SELL_FLAG'] == 1].SIZE.sum() - trds[
