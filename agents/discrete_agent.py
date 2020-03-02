@@ -53,21 +53,21 @@ class DiscreteTrader:
 		# Perform agent action
 		if action == 1:  # LO at tick level
 			inventory_delta = abs(self.target_inventory - self.current_inventory)
-			volume = np.min(inventory_delta, 100.0)
+			volume = min(inventory_delta, 100.0)
 			if self.is_buy_agent:
 				self.LOB_SIM.place_limit_buy_order_at_tick(volume, self.limit_order_level)
 			else:
 				self.LOB_SIM.place_limit_sell_order_at_tick(volume, self.limit_order_level)
 		elif action == 2:  # MO of size 100
 			inventory_delta = abs(self.target_inventory - self.current_inventory)
-			volume = np.min(inventory_delta, 100.0)
+			volume = min(inventory_delta, 100.0)
 			if self.is_buy_agent:
 				self.LOB_SIM.place_market_buy_order(volume)
 			else:
 				self.LOB_SIM.place_market_sell_order(volume)
 		elif action == 3:  # MO of size 200
 			inventory_delta = abs(self.target_inventory - self.current_inventory)
-			volume = np.min(inventory_delta, 200.0)
+			volume = min(inventory_delta, 200.0)
 			if self.is_buy_agent:
 				self.LOB_SIM.place_market_buy_order(volume)
 			else:
