@@ -28,6 +28,7 @@ class DiscreteTrader(gym.Env):
 		self.current_inventory = inventory
 		self.target_inventory = target_inventory
 		self.limit_order_level = limit_order_level
+		self.order_execution_history = []
 
 		# Set up initial LOB simulator
 		self.observation_space = gym.spaces.Box(
@@ -78,6 +79,7 @@ class DiscreteTrader(gym.Env):
 			ob, trds, executed_orders, active_limit_order_levels = self.LOB_SIM.iterate()
 		except:
 			return self.state, 0, True, {}
+		self.order_execution_history += executed_orders
 
 		# Check executed orders and update inventory
 		price_weighted_volume, total_executed_volume = 0, 0
@@ -106,9 +108,10 @@ class DiscreteTrader(gym.Env):
 		# Check if target inventory achieved
 		reached_target_position = self.current_inventory == self.target_inventory  # early stop condition
 		ran_out_of_time = self.time >= self.trade_window
-		is_done = reached_target_position or ran_out_of_time  # TODO: Morgan, is this only for early stopping or also for running out of time
+		is_done = reached_target_position or ran_out_of_time
 
 		# Calculate reward
+		# had_market_order_in_prev_period = executed_orders[]
 		reward = self.calculate_reward(shortfall, self.time)
 
 		# Update agent state
@@ -133,16 +136,24 @@ class DiscreteTrader(gym.Env):
 		ob, trds, executed_orders, active_limit_order_levels = self.LOB_SIM.iterate(force=True)
 		self.initial_price = (ob.BID_PRICE.max() + ob.ASK_PRICE.min()) / 2
 		self.state = self.calculate_state(ob, trds, executed_orders, active_limit_order_levels)
+		self.order_execution_history = []
 
 		return self.state
 
-	def calculate_reward(self, shortfall, time):
-		if time >= self.trade_window:
-			time_penalty = -self.current_inventory
+	def calculate_reward(self, shortfall, time, gamma=1):
+
+		remaining_periods = self.num_periods - self.period
+		if (self.current_inventory / 100) > gamma * remaining_periods:
+			inventory_penalty = (gamma * remaining_periods - (self.current_inventory / 100)) * 0.01
 		else:
-			time_penalty = 0
-		reward = shortfall + time_penalty  # TODO: finalize reward, time penalty weighted by remaining inventory?
-		return reward
+			inventory_penalty = 0
+
+		if time >= self.trade_window:
+			non_completion_penalty = -self.current_inventory / 10
+		else:
+			non_completion_penalty = 0
+
+		return shortfall + non_completion_penalty + inventory_penalty
 
 	def calculate_state(self, ob, trds, executed_orders, active_limit_order_levels):
 
