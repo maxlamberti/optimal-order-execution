@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 from operator import attrgetter
 from collections import namedtuple
-from queue import Queue
+from simulator.limit_queue import LimitQueue
 
 
 logging.basicConfig(format='[%(levelname)s] | %(asctime)s | %(message)s')
@@ -163,11 +163,11 @@ class OrderBookSimulator:
 			if 'BID_PRICE' in ob_level._fields:
 				price = ob_level.BID_PRICE
 				size = ob_level.BID_SIZE
-				agent_volume = self.queue_tracker['BID'].get(price, Queue(0)).get_agent_volume()
+				agent_volume = self.queue_tracker['BID'].get(price, LimitQueue(0)).get_agent_volume()
 			else:
 				price = ob_level.ASK_PRICE
 				size = ob_level.ASK_SIZE
-				agent_volume = self.queue_tracker['ASK'].get(price, Queue(0)).get_agent_volume()
+				agent_volume = self.queue_tracker['ASK'].get(price, LimitQueue(0)).get_agent_volume()
 
 			trade_volume = min(size + agent_volume, remaining_trade_volume)
 			remaining_trade_volume -= trade_volume
@@ -228,7 +228,7 @@ class OrderBookSimulator:
 		if is_valid_order and is_new_queue:  # only place new order if dont already have an order in the queue
 			# create queue at price level, place order at the end of the queue
 			tick_depth = self._get_tick_depth(self.prev_period_ob, side, order['price'])
-			self.queue_tracker[side][order['price']] = Queue(tick_depth)
+			self.queue_tracker[side][order['price']] = LimitQueue(tick_depth)
 			self.queue_tracker[side][order['price']].add_agent_order(order['volume'])
 		else:
 			logging.warning("Invalid limit order placed, order is not accepted.")
