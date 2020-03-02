@@ -8,7 +8,7 @@ from scripts.utils.data_loading import get_data_file_paths
 
 class SpamTrader(gym.Env):
 
-	def __init__(self, inventory, target_inventory, trade_window, impact_param, data_path, inventory_reduction_reward=0.001, vol_penalty_window=12, vol_penality_threshold=200, vol_penalty=0.001, limit_order_level=2, is_buy_agent=False, sampling_freq=5):
+	def __init__(self, inventory, target_inventory, trade_window, impact_param, data_path, htfu_penalty=0.001, inventory_reduction_reward=0.001, vol_penalty_window=12, vol_penality_threshold=200, vol_penalty=0.001, limit_order_level=2, is_buy_agent=False, sampling_freq=5):
 
 		self.metadata = None
 
@@ -34,6 +34,7 @@ class SpamTrader(gym.Env):
 		self.vol_penalty = vol_penalty
 		self.vol_penalty_window = vol_penalty_window
 		self.inventory_reduction_reward = inventory_reduction_reward
+		self.htfu_penalty = htfu_penalty
 
 		# Set up initial LOB simulator
 		self.observation_space = gym.spaces.Box(
@@ -156,9 +157,12 @@ class SpamTrader(gym.Env):
 
 	def calculate_reward(self, shortfall, placed_order, gamma=1):
 
-		# remaining_periods = self.num_periods - self.period
+		# hurry the fuck up penalty
+		remaining_periods = self.num_periods - self.period
 		# if (self.current_inventory / 100) > gamma * remaining_periods:
-		# 	inventory_penalty = (gamma * remaining_periods - (self.current_inventory / 100)) * 0.01
+		tau = ((self.current_inventory / 100) - remaining_periods)
+		inventory_penalty = -self.htfu_penalty * 1.0 / (1.0 + np.exp(-tau))
+			# inventory_penalty = (gamma * remaining_periods - (self.current_inventory / 100))
 		# else:
 		# 	inventory_penalty = 0
 
@@ -174,9 +178,7 @@ class SpamTrader(gym.Env):
 		else:
 			fast_execution_penalty = 0.0
 
-		# inventory risk
-
-		return shortfall + fast_execution_penalty + reduce_inventory_reward
+		return shortfall + fast_execution_penalty + reduce_inventory_reward + inventory_penalty
 
 	def calculate_state(self, ob, trds, executed_orders, active_limit_order_levels):
 
