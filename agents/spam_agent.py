@@ -156,7 +156,7 @@ class SpamTrader(gym.Env):
 
 		last_minute_vol_executed = np.sum(self.one_minute_vol_executed)
 		if last_minute_vol_executed > self.vol_penality_threshold:
-			fast_execution_penalty = -0.001 * self.one_minute_vol_executed / self.vol_penality_threshold
+			fast_execution_penalty = -0.001 * last_minute_vol_executed / self.vol_penality_threshold
 		else:
 			fast_execution_penalty = 0.0
 
