@@ -8,7 +8,7 @@ from scripts.utils.data_loading import get_data_file_paths
 
 class SpamTrader(gym.Env):
 
-	def __init__(self, inventory, target_inventory, trade_window, impact_param, data_path, vol_penality_threshold=200, limit_order_level=2, is_buy_agent=False, sampling_freq=5):
+	def __init__(self, inventory, target_inventory, trade_window, impact_param, data_path, vol_penalty_window=12, vol_penality_threshold=200, vol_penalty=0.001, limit_order_level=2, is_buy_agent=False, sampling_freq=5):
 
 		self.metadata = None
 
@@ -29,8 +29,10 @@ class SpamTrader(gym.Env):
 		self.target_inventory = target_inventory
 		self.limit_order_level = limit_order_level
 		self.order_execution_history = []
-		self.one_minute_vol_executed = np.zeros(12)
+		self.one_minute_vol_executed = np.zeros(vol_penalty_window)
 		self.vol_penality_threshold = vol_penality_threshold
+		self.vol_penalty = vol_penalty
+		self.vol_penalty_window = vol_penalty_window
 
 		# Set up initial LOB simulator
 		self.observation_space = gym.spaces.Box(
@@ -142,7 +144,7 @@ class SpamTrader(gym.Env):
 		self.initial_price = (ob.BID_PRICE.max() + ob.ASK_PRICE.min()) / 2
 		self.state = self.calculate_state(ob, trds, executed_orders, active_limit_order_levels)
 		self.order_execution_history = []
-		self.one_minute_vol_executed = np.zeros(12)
+		self.one_minute_vol_executed = np.zeros(self.vol_penalty_window)
 
 		return self.state
 
@@ -156,7 +158,7 @@ class SpamTrader(gym.Env):
 
 		last_minute_vol_executed = np.sum(self.one_minute_vol_executed)
 		if last_minute_vol_executed > self.vol_penality_threshold:
-			fast_execution_penalty = -0.001 * last_minute_vol_executed / self.vol_penality_threshold
+			fast_execution_penalty = -self.vol_penalty * last_minute_vol_executed / self.vol_penality_threshold
 		else:
 			fast_execution_penalty = 0.0
 
