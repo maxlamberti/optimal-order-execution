@@ -143,13 +143,13 @@ class DiscreteTrader(gym.Env):
 
 	def calculate_reward(self, shortfall, gamma=1):
 
-		remaining_periods = self.num_periods - self.period
-		if (self.current_inventory / 100) > gamma * remaining_periods:
-			inventory_penalty = (gamma * remaining_periods - (self.current_inventory / 100)) * 0.01
-		else:
-			inventory_penalty = 0
+		# remaining_periods = self.num_periods - self.period
+		# if (self.current_inventory / 100) > gamma * remaining_periods:
+		# 	inventory_penalty = (gamma * remaining_periods - (self.current_inventory / 100)) * 0.01
+		# else:
+		# 	inventory_penalty = 0
 
-		return shortfall + inventory_penalty
+		return shortfall #+ inventory_penalty
 
 	def calculate_state(self, ob, trds, executed_orders, active_limit_order_levels):
 
