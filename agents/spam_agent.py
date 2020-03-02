@@ -6,7 +6,7 @@ from simulator.lob import OrderBookSimulator
 from scripts.utils.data_loading import get_data_file_paths
 
 
-class DiscreteTrader(gym.Env):
+class SpamTrader(gym.Env):
 
 	def __init__(self, inventory, target_inventory, trade_window, impact_param, data_path, vol_penality_threshold=200, limit_order_level=2, is_buy_agent=False, sampling_freq=5):
 
