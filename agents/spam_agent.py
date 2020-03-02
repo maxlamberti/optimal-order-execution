@@ -63,6 +63,7 @@ class SpamTrader(gym.Env):
 				self.LOB_SIM.place_limit_buy_order_at_tick(volume, self.limit_order_level)
 			else:
 				self.LOB_SIM.place_limit_sell_order_at_tick(volume, self.limit_order_level)
+			placed_order = True
 		elif action == 2:  # MO of size 100
 			inventory_delta = abs(self.target_inventory - self.current_inventory)
 			volume = min(inventory_delta, 100.0)
@@ -70,6 +71,9 @@ class SpamTrader(gym.Env):
 				self.LOB_SIM.place_market_buy_order(volume)
 			else:
 				self.LOB_SIM.place_market_sell_order(volume)
+			placed_order = True
+		else:
+			placed_order = False
 
 		# Update market environment
 		try:
@@ -117,9 +121,10 @@ class SpamTrader(gym.Env):
 				self.LOB_SIM.place_market_buy_order(volume)
 			else:
 				self.LOB_SIM.place_market_sell_order(volume)
+			placed_order = True
 
 		# Calculate reward
-		reward = 1000 * self.calculate_reward(shortfall)
+		reward = 1000 * self.calculate_reward(shortfall, placed_order)
 
 		# Update agent state
 		self.state = self.calculate_state(ob, trds, executed_orders, active_limit_order_levels)
@@ -148,7 +153,7 @@ class SpamTrader(gym.Env):
 
 		return self.state
 
-	def calculate_reward(self, shortfall, gamma=1):
+	def calculate_reward(self, shortfall, placed_order, gamma=1):
 
 		# remaining_periods = self.num_periods - self.period
 		# if (self.current_inventory / 100) > gamma * remaining_periods:
@@ -157,7 +162,7 @@ class SpamTrader(gym.Env):
 		# 	inventory_penalty = 0
 
 		last_minute_vol_executed = np.sum(self.one_minute_vol_executed)
-		if last_minute_vol_executed > self.vol_penality_threshold:
+		if (last_minute_vol_executed > self.vol_penality_threshold) and placed_order:
 			fast_execution_penalty = -self.vol_penalty * last_minute_vol_executed / self.vol_penality_threshold
 		else:
 			fast_execution_penalty = 0.0
