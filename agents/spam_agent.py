@@ -119,7 +119,7 @@ class SpamTrader(gym.Env):
 				self.LOB_SIM.place_market_sell_order(volume)
 
 		# Calculate reward
-		reward = self.calculate_reward(shortfall)
+		reward = 1000 * self.calculate_reward(shortfall)
 
 		# Update agent state
 		self.state = self.calculate_state(ob, trds, executed_orders, active_limit_order_levels)
