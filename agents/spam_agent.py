@@ -6,9 +6,9 @@ from simulator.lob import OrderBookSimulator
 from scripts.utils.data_loading import get_data_file_paths
 
 
-class DiscreteTrader(gym.Env):
+class SpamTrader(gym.Env):
 
-	def __init__(self, inventory, target_inventory, trade_window, impact_param, data_path, limit_order_level=2, is_buy_agent=False, sampling_freq=5):
+	def __init__(self, inventory, target_inventory, trade_window, impact_param, data_path, htfu_penalty=0.001, inventory_reduction_reward=0.001, vol_penalty_window=12, vol_penality_threshold=200, vol_penalty=0.001, limit_order_level=2, is_buy_agent=False, sampling_freq=5):
 
 		self.metadata = None
 
@@ -29,11 +29,17 @@ class DiscreteTrader(gym.Env):
 		self.target_inventory = target_inventory
 		self.limit_order_level = limit_order_level
 		self.order_execution_history = []
+		self.one_minute_vol_executed = np.zeros(vol_penalty_window)
+		self.vol_penality_threshold = vol_penality_threshold
+		self.vol_penalty = vol_penalty
+		self.vol_penalty_window = vol_penalty_window
+		self.inventory_reduction_reward = inventory_reduction_reward
+		self.htfu_penalty = htfu_penalty
 
 		# Set up initial LOB simulator
 		self.observation_space = gym.spaces.Box(
-			low=np.array([0, 0, 0, 0, -1, 0, -np.inf, -np.inf, 0, 0, 0]),
-			high=np.array([np.inf, np.inf, 1, np.inf, np.inf, np.inf, np.inf, np.inf, 1, np.inf, 1]),
+			low=np.array([0, -np.inf, 0, 0, 0]),
+			high=np.array([1, np.inf, 1, np.inf, np.inf]),
 			dtype=np.float32
 		)
 
@@ -46,8 +52,8 @@ class DiscreteTrader(gym.Env):
 		self.state = self.calculate_state(ob, trds, executed_orders, active_limit_order_levels)
 
 		# Define Action Space
-		# 0: do nothing, 1: LO at tick level 2, 2: MO of size 100, 3: MO of size 200
-		self.action_space = gym.spaces.Discrete(4)  # number of discrete action bins
+		# 0: LO at tick level 2, 1: MO of size 100
+		self.action_space = gym.spaces.Discrete(3)  # number of discrete action bins
 
 	def step(self, action):
 
@@ -59,6 +65,7 @@ class DiscreteTrader(gym.Env):
 				self.LOB_SIM.place_limit_buy_order_at_tick(volume, self.limit_order_level)
 			else:
 				self.LOB_SIM.place_limit_sell_order_at_tick(volume, self.limit_order_level)
+			placed_order = False
 		elif action == 2:  # MO of size 100
 			inventory_delta = abs(self.target_inventory - self.current_inventory)
 			volume = min(inventory_delta, 100.0)
@@ -66,13 +73,9 @@ class DiscreteTrader(gym.Env):
 				self.LOB_SIM.place_market_buy_order(volume)
 			else:
 				self.LOB_SIM.place_market_sell_order(volume)
-		elif action == 3:  # MO of size 200
-			inventory_delta = abs(self.target_inventory - self.current_inventory)
-			volume = min(inventory_delta, 200.0)
-			if self.is_buy_agent:
-				self.LOB_SIM.place_market_buy_order(volume)
-			else:
-				self.LOB_SIM.place_market_sell_order(volume)
+			placed_order = True
+		else:
+			placed_order = False
 
 		# Update market environment
 		try:
@@ -80,6 +83,8 @@ class DiscreteTrader(gym.Env):
 		except:
 			return self.state, 0, True, {}
 		self.order_execution_history += executed_orders
+		self.one_minute_vol_executed[:-1] = self.one_minute_vol_executed[1:]
+		self.one_minute_vol_executed[-1] = sum([order['volume'] for order in executed_orders])
 
 		# Check executed orders and update inventory
 		price_weighted_volume, total_executed_volume = 0, 0
@@ -107,12 +112,21 @@ class DiscreteTrader(gym.Env):
 
 		# Check if target inventory achieved
 		reached_target_position = self.current_inventory == self.target_inventory  # early stop condition
+		about_to_run_out_of_time = (self.time + self.sampling_freq) >= self.trade_window
 		ran_out_of_time = self.time >= self.trade_window
 		is_done = reached_target_position or ran_out_of_time
 
+		if about_to_run_out_of_time:  # liquidate
+			inventory_delta = abs(self.target_inventory - self.current_inventory)
+			volume = inventory_delta
+			if self.is_buy_agent:
+				self.LOB_SIM.place_market_buy_order(volume)
+			else:
+				self.LOB_SIM.place_market_sell_order(volume)
+			placed_order = True
+
 		# Calculate reward
-		# had_market_order_in_prev_period = executed_orders[]
-		reward = self.calculate_reward(shortfall, self.time)
+		reward = 1000 * self.calculate_reward(shortfall, placed_order)
 
 		# Update agent state
 		self.state = self.calculate_state(ob, trds, executed_orders, active_limit_order_levels)
@@ -137,57 +151,62 @@ class DiscreteTrader(gym.Env):
 		self.initial_price = (ob.BID_PRICE.max() + ob.ASK_PRICE.min()) / 2
 		self.state = self.calculate_state(ob, trds, executed_orders, active_limit_order_levels)
 		self.order_execution_history = []
+		self.one_minute_vol_executed = np.zeros(self.vol_penalty_window)
 
 		return self.state
 
-	def calculate_reward(self, shortfall, time, gamma=1):
+	def calculate_reward(self, shortfall, placed_order, gamma=1):
 
+		# hurry the fuck up penalty
 		remaining_periods = self.num_periods - self.period
-		if (self.current_inventory / 100) > gamma * remaining_periods:
-			inventory_penalty = (gamma * remaining_periods - (self.current_inventory / 100)) * 0.01
-		else:
-			inventory_penalty = 0
+		# if (self.current_inventory / 100) > gamma * remaining_periods:
+		tau = ((self.current_inventory / 100) - remaining_periods)
+		inventory_penalty = -self.htfu_penalty * 1.0 / (1.0 + np.exp(-tau))
+			# inventory_penalty = (gamma * remaining_periods - (self.current_inventory / 100))
+		# else:
+		# 	inventory_penalty = 0
 
-		if time >= self.trade_window:
-			non_completion_penalty = -self.current_inventory / 10
+		# attempt to reduce inventory reward
+		if placed_order:
+			reduce_inventory_reward = self.inventory_reduction_reward
 		else:
-			non_completion_penalty = 0
+			reduce_inventory_reward = 0
 
-		return shortfall + non_completion_penalty + inventory_penalty
+		last_minute_vol_executed = np.sum(self.one_minute_vol_executed)
+		if (last_minute_vol_executed > self.vol_penality_threshold) and placed_order:
+			fast_execution_penalty = -self.vol_penalty - reduce_inventory_reward
+		else:
+			fast_execution_penalty = 0.0
+
+		return shortfall + fast_execution_penalty + reduce_inventory_reward + inventory_penalty
 
 	def calculate_state(self, ob, trds, executed_orders, active_limit_order_levels):
 
 		side = 'ASK' if self.is_buy_agent else 'BID'
-		opposite_side = 'BID' if (side == 'ASK') else 'ASK'
+		# opposite_side = 'BID' if (side == 'ASK') else 'ASK'
 		best_tick_volume = ob.loc[ob['LEVEL'] == 1, [side + '_SIZE']].values[-1, -1] / 100
-		second_best_tick_volume = ob.loc[ob['LEVEL'] == 2, [side + '_SIZE']].values[-1, -1] / 100
-		trading_day_progression = (1.0 / (6.5 * 60 * 60)) * ((datetime.combine(date.today(), ob.Time.dt.time.values[
-			-1]) - datetime.combine(date.today(), time(9, 30, 0))) / timedelta(seconds=1))
+		# second_best_tick_volume = ob.loc[ob['LEVEL'] == 2, [side + '_SIZE']].values[-1, -1] / 100
+		# trading_day_progression = (1.0 / (6.5 * 60 * 60)) * ((datetime.combine(date.today(), ob.Time.dt.time.values[
+		# 	-1]) - datetime.combine(date.today(), time(9, 30, 0))) / timedelta(seconds=1))
 		inventory_delta = abs(self.current_inventory - self.target_inventory) / max(abs(self.initial_inventory),
 																					abs(self.target_inventory))
-		pct_diff_from_initial_price = (ob.loc[ob['LEVEL'] == 1, [side + '_PRICE']].values[
+		pct_diff_from_initial_price = 100.0 * (ob.loc[ob['LEVEL'] == 1, [side + '_PRICE']].values[
 										   -1, -1] - self.initial_price) / self.initial_price
-		gross_last_period_trade_volume = trds.SIZE.sum() / 100
-		net_last_period_trade_volume = (trds[trds['BUY_SELL_FLAG'] == 1].SIZE.sum() - trds[
-			trds['BUY_SELL_FLAG'] == 0].SIZE.sum()) / 100
-		spread = 10 * (ob.ASK_PRICE.min() - ob.BID_PRICE.max())
+		# gross_last_period_trade_volume = trds.SIZE.sum() / 100
+		# net_last_period_trade_volume = (trds[trds['BUY_SELL_FLAG'] == 1].SIZE.sum() - trds[
+		# 	trds['BUY_SELL_FLAG'] == 0].SIZE.sum()) / 100
+		# spread = 10 * (ob.ASK_PRICE.min() - ob.BID_PRICE.max())
 		pct_trade_window_progression = self.time / self.trade_window
-		num_open_lob_levels = len(active_limit_order_levels['ASK']) + len(active_limit_order_levels['BID'])
-		has_limit_order_at_tick_2 = ob.loc[ob['LEVEL'] == 2, [opposite_side + '_PRICE']].values[-1, -1] in \
-									active_limit_order_levels[opposite_side]
+		# num_open_lob_levels = (len(active_limit_order_levels['ASK']) + len(active_limit_order_levels['BID'])) / 10.0
+		# has_limit_order_at_tick_2 = ob.loc[ob['LEVEL'] == 2, [opposite_side + '_PRICE']].values[-1, -1] in \
+		# 							active_limit_order_levels[opposite_side]
 
 		state = np.array([
-			best_tick_volume,
-			second_best_tick_volume,
-			trading_day_progression,
 			inventory_delta,
 			pct_diff_from_initial_price,
-			gross_last_period_trade_volume,
-			net_last_period_trade_volume,
-			spread,
 			pct_trade_window_progression,
-			num_open_lob_levels,
-			has_limit_order_at_tick_2
+			best_tick_volume,
+			np.sum(self.one_minute_vol_executed) / 100
 		])
 
 		return state

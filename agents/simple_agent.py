@@ -32,8 +32,8 @@ class DiscreteTrader(gym.Env):
 
 		# Set up initial LOB simulator
 		self.observation_space = gym.spaces.Box(
-			low=np.array([0, 0, 0, 0, -1, 0, -np.inf, -np.inf, 0, 0, 0]),
-			high=np.array([np.inf, np.inf, 1, np.inf, np.inf, np.inf, np.inf, np.inf, 1, np.inf, 1]),
+			low=np.array([0, -1, 0, 0]),
+			high=np.array([1, 1, 1, np.inf]),
 			dtype=np.float32
 		)
 
@@ -46,29 +46,22 @@ class DiscreteTrader(gym.Env):
 		self.state = self.calculate_state(ob, trds, executed_orders, active_limit_order_levels)
 
 		# Define Action Space
-		# 0: do nothing, 1: LO at tick level 2, 2: MO of size 100, 3: MO of size 200
-		self.action_space = gym.spaces.Discrete(4)  # number of discrete action bins
+		# 0: LO at tick level 2, 1: MO of size 100
+		self.action_space = gym.spaces.Discrete(2)  # number of discrete action bins
 
 	def step(self, action):
 
 		# Perform agent action
-		if action == 1:  # LO at tick level
+		if action == 0:  # LO at tick level
 			inventory_delta = abs(self.target_inventory - self.current_inventory)
 			volume = min(inventory_delta, 100.0)
 			if self.is_buy_agent:
 				self.LOB_SIM.place_limit_buy_order_at_tick(volume, self.limit_order_level)
 			else:
 				self.LOB_SIM.place_limit_sell_order_at_tick(volume, self.limit_order_level)
-		elif action == 2:  # MO of size 100
+		elif action == 1:  # MO of size 100
 			inventory_delta = abs(self.target_inventory - self.current_inventory)
 			volume = min(inventory_delta, 100.0)
-			if self.is_buy_agent:
-				self.LOB_SIM.place_market_buy_order(volume)
-			else:
-				self.LOB_SIM.place_market_sell_order(volume)
-		elif action == 3:  # MO of size 200
-			inventory_delta = abs(self.target_inventory - self.current_inventory)
-			volume = min(inventory_delta, 200.0)
 			if self.is_buy_agent:
 				self.LOB_SIM.place_market_buy_order(volume)
 			else:
@@ -107,12 +100,20 @@ class DiscreteTrader(gym.Env):
 
 		# Check if target inventory achieved
 		reached_target_position = self.current_inventory == self.target_inventory  # early stop condition
+		about_to_run_out_of_time = (self.time + self.sampling_freq) >= self.trade_window
 		ran_out_of_time = self.time >= self.trade_window
 		is_done = reached_target_position or ran_out_of_time
 
+		if about_to_run_out_of_time:  # liquidate
+			inventory_delta = abs(self.target_inventory - self.current_inventory)
+			volume = inventory_delta
+			if self.is_buy_agent:
+				self.LOB_SIM.place_market_buy_order(volume)
+			else:
+				self.LOB_SIM.place_market_sell_order(volume)
+
 		# Calculate reward
-		# had_market_order_in_prev_period = executed_orders[]
-		reward = self.calculate_reward(shortfall, self.time)
+		reward = self.calculate_reward(shortfall)
 
 		# Update agent state
 		self.state = self.calculate_state(ob, trds, executed_orders, active_limit_order_levels)
@@ -140,54 +141,42 @@ class DiscreteTrader(gym.Env):
 
 		return self.state
 
-	def calculate_reward(self, shortfall, time, gamma=1):
+	def calculate_reward(self, shortfall, gamma=1):
 
-		remaining_periods = self.num_periods - self.period
-		if (self.current_inventory / 100) > gamma * remaining_periods:
-			inventory_penalty = (gamma * remaining_periods - (self.current_inventory / 100)) * 0.01
-		else:
-			inventory_penalty = 0
+		# remaining_periods = self.num_periods - self.period
+		# if (self.current_inventory / 100) > gamma * remaining_periods:
+		# 	inventory_penalty = (gamma * remaining_periods - (self.current_inventory / 100)) * 0.01
+		# else:
+		# 	inventory_penalty = 0
 
-		if time >= self.trade_window:
-			non_completion_penalty = -self.current_inventory / 10
-		else:
-			non_completion_penalty = 0
-
-		return shortfall + non_completion_penalty + inventory_penalty
+		return shortfall #+ inventory_penalty
 
 	def calculate_state(self, ob, trds, executed_orders, active_limit_order_levels):
 
 		side = 'ASK' if self.is_buy_agent else 'BID'
-		opposite_side = 'BID' if (side == 'ASK') else 'ASK'
+		# opposite_side = 'BID' if (side == 'ASK') else 'ASK'
 		best_tick_volume = ob.loc[ob['LEVEL'] == 1, [side + '_SIZE']].values[-1, -1] / 100
-		second_best_tick_volume = ob.loc[ob['LEVEL'] == 2, [side + '_SIZE']].values[-1, -1] / 100
-		trading_day_progression = (1.0 / (6.5 * 60 * 60)) * ((datetime.combine(date.today(), ob.Time.dt.time.values[
-			-1]) - datetime.combine(date.today(), time(9, 30, 0))) / timedelta(seconds=1))
+		# second_best_tick_volume = ob.loc[ob['LEVEL'] == 2, [side + '_SIZE']].values[-1, -1] / 100
+		# trading_day_progression = (1.0 / (6.5 * 60 * 60)) * ((datetime.combine(date.today(), ob.Time.dt.time.values[
+		# 	-1]) - datetime.combine(date.today(), time(9, 30, 0))) / timedelta(seconds=1))
 		inventory_delta = abs(self.current_inventory - self.target_inventory) / max(abs(self.initial_inventory),
 																					abs(self.target_inventory))
 		pct_diff_from_initial_price = (ob.loc[ob['LEVEL'] == 1, [side + '_PRICE']].values[
 										   -1, -1] - self.initial_price) / self.initial_price
-		gross_last_period_trade_volume = trds.SIZE.sum() / 100
-		net_last_period_trade_volume = (trds[trds['BUY_SELL_FLAG'] == 1].SIZE.sum() - trds[
-			trds['BUY_SELL_FLAG'] == 0].SIZE.sum()) / 100
-		spread = 10 * (ob.ASK_PRICE.min() - ob.BID_PRICE.max())
+		# gross_last_period_trade_volume = trds.SIZE.sum() / 100
+		# net_last_period_trade_volume = (trds[trds['BUY_SELL_FLAG'] == 1].SIZE.sum() - trds[
+		# 	trds['BUY_SELL_FLAG'] == 0].SIZE.sum()) / 100
+		# spread = 10 * (ob.ASK_PRICE.min() - ob.BID_PRICE.max())
 		pct_trade_window_progression = self.time / self.trade_window
-		num_open_lob_levels = len(active_limit_order_levels['ASK']) + len(active_limit_order_levels['BID'])
-		has_limit_order_at_tick_2 = ob.loc[ob['LEVEL'] == 2, [opposite_side + '_PRICE']].values[-1, -1] in \
-									active_limit_order_levels[opposite_side]
+		# num_open_lob_levels = (len(active_limit_order_levels['ASK']) + len(active_limit_order_levels['BID'])) / 10.0
+		# has_limit_order_at_tick_2 = ob.loc[ob['LEVEL'] == 2, [opposite_side + '_PRICE']].values[-1, -1] in \
+		# 							active_limit_order_levels[opposite_side]
 
 		state = np.array([
-			best_tick_volume,
-			second_best_tick_volume,
-			trading_day_progression,
 			inventory_delta,
 			pct_diff_from_initial_price,
-			gross_last_period_trade_volume,
-			net_last_period_trade_volume,
-			spread,
 			pct_trade_window_progression,
-			num_open_lob_levels,
-			has_limit_order_at_tick_2
+			best_tick_volume
 		])
 
 		return state

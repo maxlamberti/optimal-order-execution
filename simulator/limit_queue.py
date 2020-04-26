@@ -5,7 +5,7 @@ import numpy as np
 logging.basicConfig(format='[%(levelname)s] | %(asctime)s | %(message)s')
 
 
-class Queue:
+class LimitQueue:
 
 	def __init__(self, depth):
 		self.non_agent_depth = depth
@@ -121,7 +121,7 @@ class Queue:
 
 if __name__ == '__main__':
 
-	Q = Queue(500)
+	Q = LimitQueue(500)
 	Q.add_agent_order(100)
 	Q.update(600, 150)
 	Q.update(600, 0)
