@@ -44,7 +44,7 @@ mkl-service==2.3.0
 more-itertools==8.0.2
 nbconvert==5.6.1
 nbformat==4.4.0
-notebook==6.0.2
+notebook==6.4.1
 numba==0.47.0
 numpy==1.18.1
 pandas==0.25.3
